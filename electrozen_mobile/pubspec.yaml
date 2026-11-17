@@ -1,0 +1,18 @@
+name: electrozen_mobile
+description: ELECTROZEN Store Companion for Wi-Fi Barcode Lookup and Mobile POS
+publish_to: "none"
+version: 1.0.5+6
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  mobile_scanner: ^5.2.3
+  shared_preferences: ^2.3.2
+  intl: ^0.19.0
+
+flutter:
+  uses-material-design: true

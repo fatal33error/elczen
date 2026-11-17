@@ -1,0 +1,9 @@
+{
+  "name": "ELECTROZEN Mobile Companion",
+  "short_name": "ELECTROZEN",
+  "start_url": "/mobile",
+  "display": "standalone",
+  "background_color": "#111113",
+  "theme_color": "#111113",
+  "orientation": "portrait"
+}

@@ -1,0 +1,38 @@
+# Node / Electron
+node_modules/
+npm-debug.log*
+build-resources/node-bin/
+dist/
+out/
+
+# Binaries & Installers
+*.apk
+*.idsig
+*.exe
+*.blockmap
+*.jks
+*.keystore
+
+# Local SQLite database & backups
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
+data/backups/
+
+# Flutter / Android build artifacts
+electrozen_mobile/build/
+electrozen_mobile/.dart_tool/
+electrozen_mobile/android/.gradle/
+electrozen_mobile/android/local.properties
+electrozen_mobile/android/key.properties
+electrozen_mobile/.flutter-plugins
+electrozen_mobile/.flutter-plugins-dependencies
+android_app/build/
+android_app/.gradle/
+android_app/local.properties
+
+# Misc / Scratch
+scratch_*/
+Pare-feu
+.DS_Store
+Thumbs.db
