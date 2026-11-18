@@ -425,4 +425,21 @@ class ElectroZenApiService {
     syncRevision.value += 1;
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
+
+  Future<Map<String, dynamic>> fetchDashboard({String range = 'all'}) async {
+    try {
+      final response = await _authorizedRequest(
+        () => http
+            .get(
+              Uri.parse('$baseUrl/api/dashboard?range=$range'),
+              headers: _headers,
+            )
+            .timeout(const Duration(seconds: 4)),
+      );
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return {};
+  }
 }

@@ -8,19 +8,25 @@ class ScannerScreen extends StatefulWidget {
   final ElectroZenApiService api;
   final void Function(Product product) onAddToCart;
   final void Function(Product? product, String? scannedBarcode, [Map<String, dynamic>? prefill]) onOpenProductForm;
+  final VoidCallback? onOpenPos;
+  final VoidCallback? onOpenCatalog;
+  final VoidCallback? onOpenPairing;
 
   const ScannerScreen({
     super.key,
     required this.api,
     required this.onAddToCart,
     required this.onOpenProductForm,
+    this.onOpenPos,
+    this.onOpenCatalog,
+    this.onOpenPairing,
   });
 
   @override
-  State<ScannerScreen> createState() => _ScannerScreenState();
+  State<ScannerScreen> createState() => ScannerScreenState();
 }
 
-class _ScannerScreenState extends State<ScannerScreen> {
+class ScannerScreenState extends State<ScannerScreen> {
   final TextEditingController _barcodeInputCtrl = TextEditingController();
 
   bool _loading = false;
@@ -29,9 +35,52 @@ class _ScannerScreenState extends State<ScannerScreen> {
   String? _notFoundBarcode;
   Product? _scannedProduct;
 
+  bool _loadingDashboard = false;
+  Map<String, dynamic> _dashboardStats = {};
+  List<Product> _dashboardRecentProducts = [];
+
   final NumberFormat _madFmt = NumberFormat('#,##0.00', 'fr_FR');
 
   String _formatMad(double value) => '${_madFmt.format(value)} MAD';
+
+  bool get hasScannedProduct => _scannedProduct != null || _notFoundBarcode != null;
+
+  bool clearScannedProduct() {
+    if (_scannedProduct != null || _notFoundBarcode != null) {
+      setState(() {
+        _scannedProduct = null;
+        _notFoundBarcode = null;
+        _barcodeInputCtrl.clear();
+      });
+      return true;
+    }
+    return false;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboardData();
+  }
+
+  Future<void> _loadDashboardData() async {
+    if (_loadingDashboard) return;
+    setState(() => _loadingDashboard = true);
+    try {
+      final dashFuture = widget.api.fetchDashboard();
+      final prodsFuture = widget.api.fetchProducts(limit: 6);
+      final results = await Future.wait([dashFuture, prodsFuture]);
+      if (!mounted) return;
+      setState(() {
+        _dashboardStats = results[0] as Map<String, dynamic>;
+        _dashboardRecentProducts = results[1] as List<Product>;
+        _loadingDashboard = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingDashboard = false);
+    }
+  }
 
   Future<void> _openCamera() async {
     final code = await BarcodeScannerModal.scan(context, title: 'Scanner Code-Barres Produit');
@@ -85,185 +134,603 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final inkPrimary = isDark ? const Color(0xFFF9FAFB) : const Color(0xFF101828);
     final inkMuted = isDark ? const Color(0xFF98A2B3) : const Color(0xFF667085);
 
-    return ListView(
-      padding: const EdgeInsets.all(14),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: cardBg,
-            border: Border.all(color: borderCol),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'SCANNER CODE-BARRES & PRIX',
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6,
-                      color: inkMuted,
-                    ),
-                  ),
-                  InkWell(
-                    onTap: () => setState(() => _hideBuyingCosts = !_hideBuyingCosts),
-                    borderRadius: BorderRadius.circular(6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: _hideBuyingCosts ? const Color(0xFF1C61E7) : subtleBg,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: _hideBuyingCosts ? const Color(0xFF3B82F6) : borderCol,
-                        ),
-                      ),
-                      child: Text(
-                        _hideBuyingCosts ? 'Mode Client (Coûts Masqués)' : 'Coûts & Marges Visibles',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: _hideBuyingCosts ? Colors.white : inkPrimary,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _barcodeInputCtrl,
-                      keyboardType: TextInputType.text,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
-                        color: inkPrimary,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: 'Code-barres EAN / SKU / Modèle...',
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 12),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      onSubmitted: _lookupCode,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1C61E7),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    onPressed: () => _lookupCode(_barcodeInputCtrl.text),
-                    child: const Text('Chercher', style: TextStyle(fontWeight: FontWeight.w600)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF203361),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: _openCamera,
-                icon: const Icon(Icons.qr_code_scanner, size: 19),
-                label: const Text('Ouvrir Caméra Scanner', style: TextStyle(fontWeight: FontWeight.w700)),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_loading)
-          const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
-        if (_errorMsg != null)
+    return RefreshIndicator(
+      onRefresh: _loadDashboardData,
+      child: ListView(
+        padding: const EdgeInsets.all(14),
+        children: [
+          // 1. SCANNER BARCODE CARD
           Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF7F1D1D).withValues(alpha: 0.15),
-              border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              _errorMsg!,
-              style: const TextStyle(color: Color(0xFFF87171), fontSize: 12.5, fontWeight: FontWeight.w600),
-            ),
-          ),
-        if (_notFoundBarcode != null)
-          Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               color: cardBg,
               border: Border.all(color: borderCol),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Code-barres non trouvé : $_notFoundBarcode',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: inkPrimary),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Ce produit n\'existe pas encore dans la base SQLite ELECTROZEN.',
-                  style: TextStyle(color: inkMuted, fontSize: 12.5),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'SCANNER CODE-BARRES & PRIX',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6,
+                        color: inkMuted,
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () => setState(() => _hideBuyingCosts = !_hideBuyingCosts),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: _hideBuyingCosts ? const Color(0xFF1C61E7) : subtleBg,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: _hideBuyingCosts ? const Color(0xFF3B82F6) : borderCol,
+                          ),
+                        ),
+                        child: Text(
+                          _hideBuyingCosts ? 'Mode Client (Coûts Masqués)' : 'Coûts & Marges Visibles',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: _hideBuyingCosts ? Colors.white : inkPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                Row(
                   children: [
-                    ElevatedButton.icon(
+                    Expanded(
+                      child: TextField(
+                        controller: _barcodeInputCtrl,
+                        keyboardType: TextInputType.text,
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          color: inkPrimary,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'Code-barres EAN / SKU / Modèle...',
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 12),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        onSubmitted: _lookupCode,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF1C61E7),
                         foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
-                      onPressed: () async {
-                        final code = _notFoundBarcode!;
-                        setState(() => _loading = true);
-                        try {
-                          final prefill = await widget.api.lookupBarcodeOnInternet(code);
-                          if (!mounted) return;
-                          setState(() => _loading = false);
-                          widget.onOpenProductForm(null, code, prefill);
-                        } catch (_) {
-                          if (!mounted) return;
-                          setState(() => _loading = false);
-                          widget.onOpenProductForm(null, code, {'found': false});
-                        }
-                      },
-                      icon: const Icon(Icons.public, size: 17),
-                      label: const Text('Chercher sur Internet & Créer'),
-                    ),
-                    OutlinedButton(
-                      onPressed: () => widget.onOpenProductForm(null, _notFoundBarcode),
-                      child: const Text('+ Saisie Manuelle'),
+                      onPressed: () => _lookupCode(_barcodeInputCtrl.text),
+                      child: const Text('Chercher', style: TextStyle(fontWeight: FontWeight.w600)),
                     ),
                   ],
+                ),
+                const SizedBox(height: 10),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF203361),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: _openCamera,
+                  icon: const Icon(Icons.qr_code_scanner, size: 19),
+                  label: const Text('Ouvrir Caméra Scanner', style: TextStyle(fontWeight: FontWeight.w700)),
                 ),
               ],
             ),
           ),
-        if (_scannedProduct != null)
-          _buildProductInspectorCard(_scannedProduct!, isDark, cardBg, subtleBg, borderCol, inkPrimary, inkMuted),
-      ],
+
+          if (_loading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+
+          if (_errorMsg != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7F1D1D).withValues(alpha: 0.15),
+                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                _errorMsg!,
+                style: const TextStyle(color: Color(0xFFF87171), fontSize: 12.5, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+
+          if (_notFoundBarcode != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: cardBg,
+                border: Border.all(color: borderCol),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Code-barres non trouvé : $_notFoundBarcode',
+                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: inkPrimary),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: clearScannedProduct,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Ce produit n\'existe pas encore dans la base SQLite ELECTROZEN.',
+                    style: TextStyle(color: inkMuted, fontSize: 12.5),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1C61E7),
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () async {
+                          final code = _notFoundBarcode!;
+                          setState(() => _loading = true);
+                          try {
+                            final prefill = await widget.api.lookupBarcodeOnInternet(code);
+                            if (!mounted) return;
+                            setState(() => _loading = false);
+                            widget.onOpenProductForm(null, code, prefill);
+                          } catch (_) {
+                            if (!mounted) return;
+                            setState(() => _loading = false);
+                            widget.onOpenProductForm(null, code, {'found': false});
+                          }
+                        },
+                        icon: const Icon(Icons.public, size: 17),
+                        label: const Text('Chercher sur Internet & Créer'),
+                      ),
+                      OutlinedButton(
+                        onPressed: () => widget.onOpenProductForm(null, _notFoundBarcode),
+                        child: const Text('+ Saisie Manuelle'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          if (_scannedProduct != null) ...[
+            const SizedBox(height: 12),
+            _buildProductInspectorCard(_scannedProduct!, isDark, cardBg, subtleBg, borderCol, inkPrimary, inkMuted),
+          ],
+
+          const SizedBox(height: 16),
+
+          // 2. DASHBOARD SECTION
+          _buildDashboardSection(isDark, cardBg, subtleBg, borderCol, inkPrimary, inkMuted),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDashboardSection(
+    bool isDark,
+    Color cardBg,
+    Color subtleBg,
+    Color borderCol,
+    Color inkPrimary,
+    Color inkMuted,
+  ) {
+    final prodStats = (_dashboardStats['productStats'] as Map<String, dynamic>?) ?? {};
+    final salesStats = (_dashboardStats['salesStats'] as Map<String, dynamic>?) ?? {};
+
+    final totalProducts = (prodStats['totalProducts'] as num?)?.toInt() ?? _dashboardRecentProducts.length;
+    final totalUnits = (prodStats['totalUnits'] as num?)?.toInt() ?? 0;
+    final stockValueRetail = (prodStats['stockValueRetail'] as num?)?.toDouble() ?? 0.0;
+    final lowStockCount = (prodStats['lowStockCount'] as num?)?.toInt() ?? 0;
+    final totalRevenue = (salesStats['totalRevenue'] as num?)?.toDouble() ?? 0.0;
+    final totalSalesCount = (salesStats['totalSalesCount'] as num?)?.toInt() ?? 0;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cardBg,
+        border: Border.all(color: borderCol),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Header
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF6D28D9).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.dashboard_outlined, size: 18, color: Color(0xFF6D28D9)),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'TABLEAU DE BORD DU MAGASIN',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.4,
+                          color: inkPrimary,
+                        ),
+                      ),
+                      Text(
+                        'Activité & Métriques en direct',
+                        style: TextStyle(fontSize: 10.5, color: inkMuted),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              IconButton(
+                icon: _loadingDashboard
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : Icon(Icons.refresh, size: 19, color: inkMuted),
+                tooltip: 'Actualiser les statistiques',
+                onPressed: _loadingDashboard ? null : _loadDashboardData,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          // 4 KPI Cards Grid (2 rows x 2 columns)
+          Row(
+            children: [
+              Expanded(
+                child: _kpiCard(
+                  title: 'CATALOGUE',
+                  value: '$totalProducts',
+                  unit: 'Articles',
+                  subtext: totalUnits > 0 ? '$totalUnits unités en stock' : 'Stock géré',
+                  icon: Icons.inventory_2_outlined,
+                  iconColor: const Color(0xFF203361),
+                  badgeBg: const Color(0xFF203361).withValues(alpha: 0.1),
+                  subtleBg: subtleBg,
+                  borderCol: borderCol,
+                  inkPrimary: inkPrimary,
+                  inkMuted: inkMuted,
+                  onTap: widget.onOpenCatalog,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _kpiCard(
+                  title: 'VALEUR VENTE',
+                  value: _formatMad(stockValueRetail),
+                  unit: '',
+                  subtext: 'Tarif public TTC',
+                  icon: Icons.point_of_sale_outlined,
+                  iconColor: const Color(0xFF10B981),
+                  badgeBg: const Color(0xFF10B981).withValues(alpha: 0.1),
+                  subtleBg: subtleBg,
+                  borderCol: borderCol,
+                  inkPrimary: inkPrimary,
+                  inkMuted: inkMuted,
+                  isMonetary: true,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _kpiCard(
+                  title: 'ALERTES STOCK',
+                  value: '$lowStockCount',
+                  unit: 'Seuil min',
+                  subtext: lowStockCount > 0 ? 'Articles à réapprovisionner' : 'Stock en bon état',
+                  icon: Icons.warning_amber_rounded,
+                  iconColor: lowStockCount > 0 ? const Color(0xFFE11D48) : const Color(0xFF10B981),
+                  badgeBg: (lowStockCount > 0 ? const Color(0xFFE11D48) : const Color(0xFF10B981)).withValues(alpha: 0.1),
+                  subtleBg: subtleBg,
+                  borderCol: borderCol,
+                  inkPrimary: inkPrimary,
+                  inkMuted: inkMuted,
+                  onTap: widget.onOpenCatalog,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _kpiCard(
+                  title: 'VENTES COMPTOIR',
+                  value: _formatMad(totalRevenue),
+                  unit: '',
+                  subtext: '$totalSalesCount ventes enregistrées',
+                  icon: Icons.receipt_long_outlined,
+                  iconColor: const Color(0xFF6D28D9),
+                  badgeBg: const Color(0xFF6D28D9).withValues(alpha: 0.1),
+                  subtleBg: subtleBg,
+                  borderCol: borderCol,
+                  inkPrimary: inkPrimary,
+                  inkMuted: inkMuted,
+                  isMonetary: true,
+                  onTap: widget.onOpenPos,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // Quick Action Shortcuts
+          Text(
+            'RACCOURCIS RAPIDES',
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+              color: inkMuted,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ActionChip(
+                avatar: const Icon(Icons.add, size: 16, color: Color(0xFF1C61E7)),
+                label: const Text('Nouveau Produit'),
+                backgroundColor: subtleBg,
+                side: BorderSide(color: borderCol),
+                onPressed: () => widget.onOpenProductForm(null, null),
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.inventory_2_outlined, size: 16, color: Color(0xFF203361)),
+                label: const Text('Gérer le Stock'),
+                backgroundColor: subtleBg,
+                side: BorderSide(color: borderCol),
+                onPressed: widget.onOpenCatalog,
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.point_of_sale_outlined, size: 16, color: Color(0xFF6D28D9)),
+                label: const Text('Panier POS Mobile'),
+                backgroundColor: subtleBg,
+                side: BorderSide(color: borderCol),
+                onPressed: widget.onOpenPos,
+              ),
+            ],
+          ),
+
+          // Recent / Quick Access Products
+          if (_dashboardRecentProducts.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'APERÇU RAPIDE CATALOGUE',
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                    color: inkMuted,
+                  ),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                  ),
+                  onPressed: widget.onOpenCatalog,
+                  child: const Text('Voir tout >', style: TextStyle(fontSize: 11.5)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 145,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _dashboardRecentProducts.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (ctx, i) {
+                  final p = _dashboardRecentProducts[i];
+                  final isLowStock = p.stockQuantity <= p.minStockAlert;
+                  return InkWell(
+                    onTap: () {
+                      setState(() {
+                        _scannedProduct = p;
+                        _barcodeInputCtrl.text = p.barcode;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      width: 140,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: subtleBg,
+                        border: Border.all(color: borderCol),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                p.brand.toUpperCase(),
+                                style: TextStyle(
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: inkMuted,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: (isLowStock ? const Color(0xFFE11D48) : const Color(0xFF10B981))
+                                      .withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  '${p.stockQuantity} u.',
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: isLowStock ? const Color(0xFFE11D48) : const Color(0xFF10B981),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Expanded(
+                            child: Text(
+                              p.localizedName(widget.api.lang),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: inkPrimary,
+                                height: 1.2,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _formatMad(p.retailPrice),
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1C61E7),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _kpiCard({
+    required String title,
+    required String value,
+    required String unit,
+    required String subtext,
+    required IconData icon,
+    required Color iconColor,
+    required Color badgeBg,
+    required Color subtleBg,
+    required Color borderCol,
+    required Color inkPrimary,
+    required Color inkMuted,
+    bool isMonetary = false,
+    VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.all(11),
+        decoration: BoxDecoration(
+          color: subtleBg,
+          border: Border.all(color: borderCol),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                    color: inkMuted,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: badgeBg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Icon(icon, size: 15, color: iconColor),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: isMonetary ? 'monospace' : null,
+                fontSize: isMonetary ? 13.5 : 17,
+                fontWeight: FontWeight.w800,
+                color: inkPrimary,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtext,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 10, color: inkMuted),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -307,26 +774,38 @@ class _ScannerScreenState extends State<ScannerScreen> {
                         color: inkMuted,
                       ),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: (p.stockQuantity > p.minStockAlert ? const Color(0xFF10B981) : const Color(0xFFE11D48))
-                            .withValues(alpha: 0.14),
-                        border: Border.all(
-                          color: (p.stockQuantity > p.minStockAlert ? const Color(0xFF10B981) : const Color(0xFFE11D48))
-                              .withValues(alpha: 0.4),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: (p.stockQuantity > p.minStockAlert ? const Color(0xFF10B981) : const Color(0xFFE11D48))
+                                .withValues(alpha: 0.14),
+                            border: Border.all(
+                              color: (p.stockQuantity > p.minStockAlert ? const Color(0xFF10B981) : const Color(0xFFE11D48))
+                                  .withValues(alpha: 0.4),
+                            ),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            'Stock: ${p.stockQuantity} u.',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: p.stockQuantity > p.minStockAlert ? const Color(0xFF10B981) : const Color(0xFFE11D48),
+                            ),
+                          ),
                         ),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        'Stock: ${p.stockQuantity} u.',
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                          color: p.stockQuantity > p.minStockAlert ? const Color(0xFF10B981) : const Color(0xFFE11D48),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 19),
+                          tooltip: 'Fermer l\'aperçu',
+                          constraints: const BoxConstraints(),
+                          padding: EdgeInsets.zero,
+                          onPressed: clearScannedProduct,
                         ),
-                      ),
+                      ],
                     ),
                   ],
                 ),
@@ -448,32 +927,43 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 Row(
                   children: [
                     Expanded(
-                      child: ElevatedButton(
+                      child: ElevatedButton.icon(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF10B981),
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
-                        onPressed: p.stockQuantity > 0 ? () => widget.onAddToCart(p) : null,
-                        child: const Text('Ajouter au Panier POS', style: TextStyle(fontWeight: FontWeight.w700)),
+                        onPressed: () {
+                          widget.onAddToCart(p);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Ajouté au panier POS : ${p.localizedName(widget.api.lang)}'),
+                              duration: const Duration(seconds: 2),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.add_shopping_cart, size: 18),
+                        label: const Text('Ajouter au Panier POS', style: TextStyle(fontWeight: FontWeight.w700)),
                       ),
                     ),
                     const SizedBox(width: 8),
-                    OutlinedButton(
+                    OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       onPressed: () => widget.onOpenProductForm(p, null),
-                      child: const Text('Modifier'),
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text('Modifier'),
                     ),
                   ],
                 ),
                 if (!_hideBuyingCosts && p.priceHistory.isNotEmpty) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   Text(
-                    'HISTORIQUE DES DERNIERS PRIX D\'ACHAT (ARRIVAGES)',
+                    'HISTORIQUE DES PRIX & ARRIVAGES (${p.priceHistory.length})',
                     style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5, color: inkMuted),
                   ),
                   const SizedBox(height: 6),
@@ -496,7 +986,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(h.supplierName, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: inkPrimary)),
+                                    Text(
+                                      h.supplierName.isEmpty ? 'Fournisseur Comptoir' : h.supplierName,
+                                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11.5, color: inkPrimary),
+                                    ),
                                     Text(
                                       '${h.recordedAt.split(" ").first} • Réf: ${h.invoiceRef.isEmpty ? "N/A" : h.invoiceRef} (+${h.quantityAdded} u.)',
                                       style: TextStyle(fontSize: 11, color: inkMuted),

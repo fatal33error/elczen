@@ -21,10 +21,10 @@ class CatalogFormScreen extends StatefulWidget {
   });
 
   @override
-  State<CatalogFormScreen> createState() => _CatalogFormScreenState();
+  State<CatalogFormScreen> createState() => CatalogFormScreenState();
 }
 
-class _CatalogFormScreenState extends State<CatalogFormScreen> {
+class CatalogFormScreenState extends State<CatalogFormScreen> {
   final TextEditingController _searchCtrl = TextEditingController();
   List<Product> _products = [];
   String _selectedCategory = 'ALL';
@@ -35,6 +35,19 @@ class _CatalogFormScreenState extends State<CatalogFormScreen> {
   String? _loadError;
   bool _showForm = false;
   int? _editingId;
+
+  bool get isShowingForm => _showForm;
+
+  bool handleBack() {
+    if (_showForm) {
+      setState(() {
+        _showForm = false;
+        _editingId = null;
+      });
+      return true;
+    }
+    return false;
+  }
 
   // Form controllers
   final _barcodeCtrl = TextEditingController();
@@ -333,13 +346,26 @@ class _CatalogFormScreenState extends State<CatalogFormScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      _editingId == null ? 'NOUVEAU PRODUIT' : 'MODIFIER PRODUIT #$_editingId',
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back),
+                          tooltip: 'Retour au catalogue',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          onPressed: () => setState(() => _showForm = false),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _editingId == null ? 'NOUVEAU PRODUIT' : 'MODIFIER PRODUIT #$_editingId',
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                        ),
+                      ],
                     ),
-                    TextButton(
+                    TextButton.icon(
                       onPressed: () => setState(() => _showForm = false),
-                      child: const Text('Retour Catalogue'),
+                      icon: const Icon(Icons.close, size: 16),
+                      label: const Text('Fermer'),
                     ),
                   ],
                 ),

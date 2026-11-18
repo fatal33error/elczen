@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'models/models.dart';
 import 'services/api_service.dart';
 import 'screens/scanner_screen.dart';
@@ -30,10 +31,74 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
   String? _pendingNewBarcode;
   Map<String, dynamic>? _pendingInternetPrefill;
 
+  final GlobalKey<ScannerScreenState> _scannerKey = GlobalKey<ScannerScreenState>();
+  final GlobalKey<CatalogFormScreenState> _catalogKey = GlobalKey<CatalogFormScreenState>();
+  DateTime? _lastBackPressTime;
+
   @override
   void initState() {
     super.initState();
     widget.api.pairDevice().catchError((_) => <String, dynamic>{});
+  }
+
+  void _handleBack() {
+    // 1. If inside Catalog tab and the create/edit form is showing, close form first
+    if (_selectedIndex == 1 && _catalogKey.currentState?.isShowingForm == true) {
+      _catalogKey.currentState?.handleBack();
+      return;
+    }
+    // 2. If inside Scanner tab and a scanned product inspector is showing, clear it first
+    if (_selectedIndex == 0 && _scannerKey.currentState?.hasScannedProduct == true) {
+      _scannerKey.currentState?.clearScannedProduct();
+      return;
+    }
+    // 3. If in another tab (Products or POS), go back to Scanner / Dashboard tab
+    if (_selectedIndex != 0) {
+      setState(() {
+        _pendingEditProduct = null;
+        _pendingNewBarcode = null;
+        _selectedIndex = 0;
+      });
+      return;
+    }
+    // 4. If already on Tab 0 home, double-back to exit application safely
+    final now = DateTime.now();
+    if (_lastBackPressTime == null || now.difference(_lastBackPressTime!) > const Duration(seconds: 2)) {
+      _lastBackPressTime = now;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Appuyez à nouveau pour quitter ELECTROZEN'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    SystemNavigator.pop();
+  }
+
+  void _openPairingModal(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+          appBar: AppBar(
+            backgroundColor: const Color(0xFF203361),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            title: const Text('Wi-Fi Sync & Appairage Serveur', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              tooltip: 'Retour',
+              onPressed: () => Navigator.of(ctx).pop(),
+            ),
+          ),
+          body: PairingScreen(
+            api: widget.api,
+            onConfigChanged: () => setState(() {}),
+          ),
+        ),
+      ),
+    );
   }
 
   void _addToCart(Product p) {
@@ -126,170 +191,196 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
           child: child!,
         );
       },
-      home: Scaffold(
-        appBar: AppBar(
-          backgroundColor: const Color(0xFF203361),
-          foregroundColor: Colors.white,
-          elevation: 0,
-          titleSpacing: 14,
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'EZ',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.w900,
-                    fontSize: 12,
-                    color: Color(0xFF203361),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+      home: Builder(
+        builder: (homeContext) {
+          final isScanningProduct = _selectedIndex == 0 && _scannerKey.currentState?.hasScannedProduct == true;
+          final isEditingCatalog = _selectedIndex == 1 && _catalogKey.currentState?.isShowingForm == true;
+          final showBackArrow = _selectedIndex != 0 || isScanningProduct || isEditingCatalog;
+
+          return PopScope(
+            canPop: false,
+            onPopInvokedWithResult: (didPop, result) async {
+              if (didPop) return;
+              _handleBack();
+            },
+            child: Scaffold(
+              appBar: AppBar(
+                backgroundColor: const Color(0xFF203361),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                titleSpacing: 8,
+                leading: showBackArrow
+                    ? IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        tooltip: 'Retour',
+                        onPressed: _handleBack,
+                      )
+                    : IconButton(
+                        icon: const Icon(Icons.more_vert),
+                        tooltip: 'Wi-Fi Sync & Connexion Serveur',
+                        onPressed: () => _openPairingModal(homeContext),
+                      ),
+                title: Row(
                   children: [
-                    const Text(
-                      'ELECTROZEN',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'EZ',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                          color: Color(0xFF203361),
+                        ),
+                      ),
                     ),
-                    Text(
-                      'Wi-Fi: ${widget.api.host}:${widget.api.port}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 10.5, color: Color(0xFFBFC8DC)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ELECTROZEN',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                          ),
+                          Text(
+                            'Wi-Fi: ${widget.api.host}:${widget.api.port}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontFamily: 'monospace', fontSize: 10, color: Color(0xFFBFC8DC)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  InkWell(
+                    onTap: () => _openPairingModal(homeContext),
+                    borderRadius: BorderRadius.circular(12),
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: widget.api.isOnline,
+                      builder: (_, online, __) => Container(
+                        margin: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: (online ? const Color(0xFF39AE52) : const Color(0xFFE21B1B)).withValues(alpha: 0.2),
+                          border: Border.all(color: online ? const Color(0xFF39AE52) : const Color(0xFFE21B1B)),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          online ? 'EN LIGNE' : 'HORS LIGNE',
+                          style: const TextStyle(fontFamily: 'monospace', fontSize: 9.5, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Mode Clair / Mode Sombre',
+                    onPressed: () => setState(() => _obsidianDark = !_obsidianDark),
+                    icon: Icon(_obsidianDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined, size: 19),
+                  ),
+                  PopupMenuButton<String>(
+                    initialValue: widget.api.lang,
+                    icon: Text(
+                      widget.api.lang.toUpperCase(),
+                      style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700, fontSize: 12),
+                    ),
+                    onSelected: (lang) async {
+                      await widget.api.saveConfig(
+                        newHost: widget.api.host,
+                        newPort: widget.api.port,
+                        newToken: widget.api.pairingToken,
+                        newDeviceName: widget.api.deviceName,
+                        newLang: lang,
+                      );
+                      setState(() {});
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'fr', child: Text('Français (FR)')),
+                      PopupMenuItem(value: 'ar', child: Text('العربية (AR)')),
+                      PopupMenuItem(value: 'en', child: Text('English (EN)')),
+                    ],
+                  ),
+                ],
+              ),
+              body: IndexedStack(
+                index: _selectedIndex,
+                children: [
+                  ScannerScreen(
+                    key: _scannerKey,
+                    api: widget.api,
+                    onAddToCart: _addToCart,
+                    onOpenProductForm: _openProductForm,
+                    onOpenPos: () => setState(() => _selectedIndex = 2),
+                    onOpenCatalog: () => setState(() => _selectedIndex = 1),
+                    onOpenPairing: () => _openPairingModal(homeContext),
+                  ),
+                  CatalogFormScreen(
+                    key: _catalogKey,
+                    api: widget.api,
+                    initialEditProduct: _pendingEditProduct,
+                    initialScannedBarcode: _pendingNewBarcode,
+                    initialInternetPrefill: _pendingInternetPrefill,
+                    onAddToCart: _addToCart,
+                  ),
+                  MobilePosScreen(
+                    api: widget.api,
+                    cart: _cart,
+                    onCartUpdated: () => setState(() {}),
+                  ),
+                ],
+              ),
+              bottomNavigationBar: Container(
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: _obsidianDark ? const Color(0xFF1D2939) : const Color(0xFFE4E7EC))),
+                ),
+                child: BottomNavigationBar(
+                  currentIndex: _selectedIndex,
+                  type: BottomNavigationBarType.fixed,
+                  backgroundColor: _obsidianDark ? const Color(0xFF101828) : Colors.white,
+                  selectedItemColor: _obsidianDark ? Colors.white : const Color(0xFF203361),
+                  unselectedItemColor: const Color(0xFF667085),
+                  selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11.5),
+                  unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11),
+                  onTap: (idx) {
+                    setState(() {
+                      if (idx != 1) {
+                        _pendingEditProduct = null;
+                        _pendingNewBarcode = null;
+                      }
+                      _selectedIndex = idx;
+                    });
+                  },
+                  items: [
+                    const BottomNavigationBarItem(
+                      icon: Icon(Icons.qr_code_scanner, size: 20),
+                      label: 'Scanner & Prix',
+                    ),
+                    const BottomNavigationBarItem(
+                      icon: Icon(Icons.inventory_2_outlined, size: 20),
+                      label: 'Produits & Stock',
+                    ),
+                    BottomNavigationBarItem(
+                      icon: Badge(
+                        isLabelVisible: _cart.isNotEmpty,
+                        label: Text('${_cart.length}'),
+                        child: const Icon(Icons.point_of_sale_outlined, size: 20),
+                      ),
+                      label: 'POS Mobile',
                     ),
                   ],
                 ),
               ),
-            ],
-          ),
-          actions: [
-            ValueListenableBuilder<bool>(
-              valueListenable: widget.api.isOnline,
-              builder: (_, online, __) => Container(
-                margin: const EdgeInsets.symmetric(vertical: 14),
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: (online ? const Color(0xFF39AE52) : const Color(0xFFE21B1B)).withValues(alpha: 0.2),
-                  border: Border.all(color: online ? const Color(0xFF39AE52) : const Color(0xFFE21B1B)),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  online ? 'EN LIGNE' : 'HORS LIGNE',
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 9.5, fontWeight: FontWeight.w800),
-                ),
-              ),
             ),
-            IconButton(
-              tooltip: 'Mode Clair / Mode Sombre',
-              onPressed: () => setState(() => _obsidianDark = !_obsidianDark),
-              icon: Icon(_obsidianDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined, size: 19),
-            ),
-            PopupMenuButton<String>(
-              initialValue: widget.api.lang,
-              icon: Text(
-                widget.api.lang.toUpperCase(),
-                style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700, fontSize: 12),
-              ),
-              onSelected: (lang) async {
-                await widget.api.saveConfig(
-                  newHost: widget.api.host,
-                  newPort: widget.api.port,
-                  newToken: widget.api.pairingToken,
-                  newDeviceName: widget.api.deviceName,
-                  newLang: lang,
-                );
-                setState(() {});
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'fr', child: Text('Français (FR)')),
-                PopupMenuItem(value: 'ar', child: Text('العربية (AR)')),
-                PopupMenuItem(value: 'en', child: Text('English (EN)')),
-              ],
-            ),
-          ],
-        ),
-        body: IndexedStack(
-          index: _selectedIndex,
-          children: [
-            ScannerScreen(
-              api: widget.api,
-              onAddToCart: _addToCart,
-              onOpenProductForm: _openProductForm,
-            ),
-            CatalogFormScreen(
-              key: ValueKey('${_pendingEditProduct?.id}-${_pendingNewBarcode ?? ""}-${_pendingInternetPrefill?.hashCode ?? 0}'),
-              api: widget.api,
-              initialEditProduct: _pendingEditProduct,
-              initialScannedBarcode: _pendingNewBarcode,
-              initialInternetPrefill: _pendingInternetPrefill,
-              onAddToCart: _addToCart,
-            ),
-            MobilePosScreen(
-              api: widget.api,
-              cart: _cart,
-              onCartUpdated: () => setState(() {}),
-            ),
-            PairingScreen(
-              api: widget.api,
-              onConfigChanged: () => setState(() {}),
-            ),
-          ],
-        ),
-        bottomNavigationBar: Container(
-          decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: _obsidianDark ? const Color(0xFF1D2939) : const Color(0xFFE4E7EC))),
-          ),
-          child: BottomNavigationBar(
-            currentIndex: _selectedIndex,
-            type: BottomNavigationBarType.fixed,
-            backgroundColor: _obsidianDark ? const Color(0xFF101828) : Colors.white,
-            selectedItemColor: _obsidianDark ? Colors.white : const Color(0xFF203361),
-            unselectedItemColor: const Color(0xFF667085),
-            selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11.5),
-            unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11),
-            onTap: (idx) {
-              setState(() {
-                if (idx != 1) {
-                  _pendingEditProduct = null;
-                  _pendingNewBarcode = null;
-                }
-                _selectedIndex = idx;
-              });
-            },
-            items: [
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.qr_code_scanner, size: 20),
-                label: 'Scanner & Prix',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.inventory_2_outlined, size: 20),
-                label: 'Produits & Stock',
-              ),
-              BottomNavigationBarItem(
-                icon: Badge(
-                  isLabelVisible: _cart.isNotEmpty,
-                  label: Text('${_cart.length}'),
-                  child: const Icon(Icons.point_of_sale_outlined, size: 20),
-                ),
-                label: 'POS Mobile',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.wifi_tethering, size: 20),
-                label: 'Wi-Fi Sync',
-              ),
-            ],
-          ),
-        ),
+          );
+        },
       ),
     );
   }
