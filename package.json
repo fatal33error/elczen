@@ -33,6 +33,10 @@
         "to": "app-runtime/public"
       },
       {
+        "from": "data",
+        "to": "app-runtime/data"
+      },
+      {
         "from": "build-resources/node-bin",
         "to": "node-bin"
       }

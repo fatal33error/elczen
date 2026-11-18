@@ -584,6 +584,63 @@ function seedInitialData() {
   const existingProducts = db.prepare('SELECT COUNT(*) as count FROM products').get() as { count: number };
   if (existingProducts.count > 0) return;
 
+  const seedProductsPath = path.resolve(dataDir, 'seeds', 'products-seed.json');
+  const fallbackSeedsPath = path.resolve(import.meta.dirname, '..', 'data', 'seeds', 'products-seed.json');
+  const actualSeedPath = fs.existsSync(seedProductsPath) ? seedProductsPath : (fs.existsSync(fallbackSeedsPath) ? fallbackSeedsPath : null);
+
+  if (actualSeedPath) {
+    try {
+      const seedProducts = JSON.parse(fs.readFileSync(actualSeedPath, 'utf-8'));
+      if (Array.isArray(seedProducts) && seedProducts.length > 0) {
+        const insProduct = db.prepare(`
+          INSERT INTO products (
+            barcode, sku, model_number, brand, category,
+            name_fr, name_ar, name_en,
+            description_fr, description_ar, description_en,
+            specs_json, retail_price, wholesale_price, min_selling_price,
+            current_cost_price, last_cost_price, stock_quantity, min_stock_alert,
+            warranty_months, has_serial, image_url, woo_id, woo_sync_status,
+            regular_price, source_site, permalink
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const p of seedProducts) {
+          insProduct.run(
+            p.barcode || '',
+            p.sku || '',
+            p.model_number || '',
+            p.brand || '',
+            p.category || 'Général',
+            p.name_fr || '',
+            p.name_ar || '',
+            p.name_en || '',
+            p.description_fr || '',
+            p.description_ar || '',
+            p.description_en || '',
+            p.specs_json || '{}',
+            p.retail_price || 0,
+            p.wholesale_price || 0,
+            p.min_selling_price || 0,
+            p.current_cost_price || 0,
+            p.last_cost_price || 0,
+            p.stock_quantity || 0,
+            p.min_stock_alert || 2,
+            p.warranty_months || 12,
+            p.has_serial || 0,
+            p.image_url || '',
+            p.woo_id || null,
+            p.woo_sync_status || 'synced',
+            p.regular_price || 0,
+            p.source_site || 'electrozen.ma',
+            p.permalink || ''
+          );
+        }
+        return;
+      }
+    } catch (err) {
+      console.error('Failed to seed from JSON:', err);
+    }
+  }
+
   // Seed Suppliers (Morocco)
   const insertSupplier = db.prepare(`
     INSERT INTO suppliers (name, company, phone, email, address, balance_owed, notes)

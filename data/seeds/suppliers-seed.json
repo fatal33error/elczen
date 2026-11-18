@@ -1,0 +1,46 @@
+[
+  {
+    "id": 1,
+    "name": "Youssef Bennani",
+    "company": "TCL & Smart TV Maroc Distribution",
+    "phone": "+212 522 34 12 90",
+    "email": "commandes@tcl-maroc.ma",
+    "address": "Zone Industrielle Ain Sebaa, Casablanca",
+    "balance_owed": 42500.0,
+    "notes": "Distributeur Officiel TCL, QLED, MiniLED, Machines à laver & Climatiseurs",
+    "created_at": "2026-11-11 15:56:07"
+  },
+  {
+    "id": 2,
+    "name": "Karim Tazi",
+    "company": "ZEN RIDE & Mobilité Urbaine Import",
+    "phone": "+212 661 44 89 10",
+    "email": "import@electrozen.ma",
+    "address": "Port de Casablanca / Maarif",
+    "balance_owed": 28000.0,
+    "notes": "Importateur Trottinettes Électriques EcoXtrem, HEZZO, Maxwheel, Evoscoot, KuKirin, Kepow",
+    "created_at": "2026-11-11 15:56:07"
+  },
+  {
+    "id": 3,
+    "name": "Nadia Chraibi",
+    "company": "Roch, Sharp & Whirlpool Maroc",
+    "phone": "+212 522 70 81 22",
+    "email": "pro@froid-maroc.ma",
+    "address": "Sidi Maarouf, Casablanca",
+    "balance_owed": 19400.0,
+    "notes": "Fournisseur Réfrigérateurs Roch, Sharp, Schneider, Infiniton & Whirlpool",
+    "created_at": "2026-11-11 15:56:07"
+  },
+  {
+    "id": 4,
+    "name": "Mehdi Alaoui",
+    "company": "Hikvision & Réseaux Pro Maroc",
+    "phone": "+212 522 99 18 40",
+    "email": "b2b@electrozen.ma",
+    "address": "Derb Ghallef, Casablanca",
+    "balance_owed": 8500.0,
+    "notes": "Caméras IP/4K, DVR AcuSense, Switch PoE, Serrures Intelligentes & Moniteurs",
+    "created_at": "2026-11-11 15:56:07"
+  }
+]
