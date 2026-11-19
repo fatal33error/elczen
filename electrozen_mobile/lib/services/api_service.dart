@@ -477,6 +477,82 @@ class ElectroZenApiService {
     syncRevision.value += 1;
   }
 
+  Future<Map<String, dynamic>> extractProductFromImages(
+    List<Map<String, String>> images, {
+    String hintName = '',
+  }) async {
+    final response = await _authorizedRequest(
+      () => http
+          .post(
+            Uri.parse('$baseUrl/api/ai/extract-product-from-images'),
+            headers: _headers,
+            body: jsonEncode({
+              'images': images,
+              'hintName': hintName,
+            }),
+          )
+          .timeout(const Duration(seconds: 35)),
+    );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(decoded['error'] ?? 'Erreur extraction photo produit (HTTP ${response.statusCode})');
+    }
+    return decoded;
+  }
+
+  Future<Map<String, dynamic>> enhanceProductWithAi({
+    required String nameFr,
+    String nameAr = '',
+    String brand = '',
+    String modelNumber = '',
+    String category = '',
+    String specsText = '',
+    String descriptionFr = '',
+  }) async {
+    final response = await _authorizedRequest(
+      () => http
+          .post(
+            Uri.parse('$baseUrl/api/ai/enhance-product'),
+            headers: _headers,
+            body: jsonEncode({
+              'name_fr': nameFr,
+              'name_ar': nameAr,
+              'brand': brand,
+              'model_number': modelNumber,
+              'category': category,
+              'specs_text': specsText,
+              'description_fr': descriptionFr,
+            }),
+          )
+          .timeout(const Duration(seconds: 25)),
+    );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(decoded['error'] ?? 'Erreur amélioration IA (HTTP ${response.statusCode})');
+    }
+    return decoded;
+  }
+
+  Future<String> uploadProductImage(String imageBase64, {String mimeType = 'image/jpeg'}) async {
+    final response = await _authorizedRequest(
+      () => http
+          .post(
+            Uri.parse('$baseUrl/api/products/upload-image'),
+            headers: _headers,
+            body: jsonEncode({
+              'imageBase64': imageBase64,
+              'mimeType': mimeType,
+            }),
+          )
+          .timeout(const Duration(seconds: 15)),
+    );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(decoded['error'] ?? 'Erreur upload photo (HTTP ${response.statusCode})');
+    }
+    return (decoded['image_url'] ?? '').toString();
+  }
+
   Future<Map<String, dynamic>> scanSupplierInvoice({
     String imageBase64 = '',
     String mimeType = 'image/jpeg',

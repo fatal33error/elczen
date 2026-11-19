@@ -293,6 +293,117 @@ Rules:
   }
 }
 
+async function callAiVisionProductExtraction(
+  providerRaw: string,
+  apiKey: string,
+  images: Array<{ imageBase64: string; mimeType?: string }>,
+  hintName = ''
+): Promise<{ data: Record<string, any> | null; provider: string; error?: string }> {
+  const provider = (providerRaw || 'gemini').toLowerCase();
+  const key = String(apiKey || '').trim();
+  if (!key) return { data: null, provider: 'none', error: 'Aucune clé API IA configurée dans Paramètres.' };
+  if (!Array.isArray(images) || images.length === 0) {
+    return { data: null, provider, error: 'Aucune image fournie.' };
+  }
+
+  const visionPrompt = `You are a retail electronics & home appliances product catalog expert in Morocco.
+Inspect ALL provided product/box photos carefully (front, back, side panels, model stickers, feature icons, Arabic/French labels) and extract all product details.
+${hintName ? `Additional user hint: "${hintName}".` : ''}
+Return ONLY strict valid JSON with these exact keys:
+{
+  "brand": "string (e.g. SONIC, LG, Samsung, Bosch, Siera...)",
+  "model_number": "string (exact model code printed on the box/label, e.g. FE5022SC)",
+  "barcode": "string (EAN barcode digits if visible on sticker, else empty)",
+  "category": "string (one of: Gros Électroménager, Petit Électroménager, TV & Audio, Climatisation & Chauffage, Froid & Congélation, Lavage & Séchage, Cuisine & Fours, Sécurité & Vidéosurveillance, Informatique & Réseau)",
+  "name_fr": "string (clear French commercial product title including brand, capacity/size, model)",
+  "name_ar": "string (clear Arabic commercial product title)",
+  "name_en": "string (clear English commercial product title)",
+  "specs_text": "string (bullet-style technical features extracted from icons/text on the box, separated by ' • ')",
+  "description_fr": "string (2-3 sentences clean French description summarizing features and included accessories)",
+  "description_ar": "string (2-3 sentences clean Arabic description)",
+  "description_en": "string (2-3 sentences clean English description)",
+  "warranty_months": 12
+}
+Return ONLY valid JSON without markdown code fences.`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    let contentText = '';
+
+    if (provider === 'deepseek') {
+      clearTimeout(timer);
+      return {
+        data: null,
+        provider: 'deepseek',
+        error: 'DeepSeek ne supporte pas l\'analyse d\'images (Vision). Sélectionnez Gemini ou OpenAI dans Paramètres IA.',
+      };
+    } else if (provider === 'openai') {
+      const userContent: any[] = [{ type: 'text', text: visionPrompt }];
+      for (const img of images.slice(0, 4)) {
+        const cleanB64 = String(img.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+        if (cleanB64) {
+          userContent.push({
+            type: 'image_url',
+            image_url: { url: `data:${img.mimeType || 'image/jpeg'};base64,${cleanB64}` },
+          });
+        }
+      }
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          temperature: 0.15,
+          response_format: { type: 'json_object' },
+          messages: [{ role: 'user', content: userContent }],
+        }),
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        return { data: null, provider: 'openai', error: `OPENAI HTTP ${resp.status}: ${errBody.slice(0, 140)}` };
+      }
+      const json = (await resp.json()) as any;
+      contentText = json?.choices?.[0]?.message?.content || '';
+    } else {
+      const parts: any[] = [{ text: visionPrompt }];
+      for (const img of images.slice(0, 4)) {
+        const cleanB64 = String(img.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+        if (cleanB64) {
+          parts.push({ inline_data: { mime_type: img.mimeType || 'image/jpeg', data: cleanB64 } });
+        }
+      }
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${encodeURIComponent(key)}`,
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: { responseMimeType: 'application/json', temperature: 0.15 },
+          }),
+        }
+      );
+      clearTimeout(timer);
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        return { data: null, provider: 'gemini', error: `GEMINI HTTP ${resp.status}: ${errBody.slice(0, 140)}` };
+      }
+      const json = (await resp.json()) as any;
+      contentText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    }
+
+    const parsed = parseJsonFromAiText(contentText);
+    if (!parsed) return { data: null, provider, error: 'Réponse JSON invalide de l\'IA.' };
+    return { data: parsed, provider };
+  } catch (err: any) {
+    return { data: null, provider, error: err?.message || 'Erreur réseau IA Vision' };
+  }
+}
+
 async function fetchJsonWithTimeout(url: string, ms = 4500): Promise<any | null> {
   try {
     const controller = new AbortController();
@@ -1317,7 +1428,7 @@ const server = http.createServer(async (req, res) => {
           description_fr = ?, description_ar = ?, description_en = ?,
           retail_price = ?, wholesale_price = ?, min_selling_price = ?,
           current_cost_price = ?, last_cost_price = ?,
-          stock_quantity = ?, min_stock_alert = ?, warranty_months = ?, has_serial = ?,
+          stock_quantity = ?, min_stock_alert = ?, warranty_months = ?, has_serial = ?, image_url = ?,
           woo_sync_status = 'pending', updated_at = datetime('now')
         WHERE id = ?
       `).run(
@@ -1341,6 +1452,7 @@ const server = http.createServer(async (req, res) => {
         p.min_stock_alert !== undefined ? Number(p.min_stock_alert) : existing.min_stock_alert,
         p.warranty_months !== undefined ? Number(p.warranty_months) : existing.warranty_months,
         p.has_serial !== undefined ? (p.has_serial ? 1 : 0) : existing.has_serial,
+        p.image_url !== undefined ? String(p.image_url) : existing.image_url,
         id
       );
 
@@ -2024,6 +2136,122 @@ const server = http.createServer(async (req, res) => {
         total_amount: Number(extracted.total_amount) || matchedItems.reduce((s: number, i: any) => s + i.quantity * i.unit_cost, 0),
         items: matchedItems,
       });
+      return;
+    }
+
+    if (pathname === '/api/products/upload-image' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const rawB64 = String(body.imageBase64 || '').trim();
+      const mimeType = String(body.mimeType || 'image/jpeg').toLowerCase();
+      if (!rawB64) {
+        sendJson(res, 400, { error: 'Image base64 manquante' });
+        return;
+      }
+      const cleanB64 = rawB64.replace(/^data:[^;]+;base64,/, '');
+      const ext = mimeType.includes('png') ? '.png' : mimeType.includes('webp') ? '.webp' : '.jpg';
+      const uploadDir = path.join(publicDir, 'uploads', 'products');
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+      const fileName = `prod-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}${ext}`;
+      const fullPath = path.join(uploadDir, fileName);
+      fs.writeFileSync(fullPath, Buffer.from(cleanB64, 'base64'));
+      const imageUrl = `/uploads/products/${fileName}`;
+      sendJson(res, 200, { success: true, image_url: imageUrl });
+      return;
+    }
+
+    if (pathname === '/api/ai/extract-product-from-images' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const images = Array.isArray(body.images) ? body.images : [];
+      const hintName = String(body.hintName || '').trim();
+      const settings = getSettingsMap();
+      const aiProvider = String(body.ai_provider || settings.ai_provider || 'gemini');
+      const aiApiKey = String(body.ai_api_key || settings.ai_api_key || '');
+
+      const aiRes = await callAiVisionProductExtraction(aiProvider, aiApiKey, images, hintName);
+      if (!aiRes.data) {
+        sendJson(res, 400, { error: aiRes.error || 'Impossible d\'extraire les informations depuis ces photos.' });
+        return;
+      }
+      sendJson(res, 200, {
+        success: true,
+        source: aiRes.provider,
+        brand: String(aiRes.data.brand || ''),
+        model_number: String(aiRes.data.model_number || ''),
+        barcode: String(aiRes.data.barcode || ''),
+        category: String(aiRes.data.category || 'Petit Électroménager'),
+        name_fr: String(aiRes.data.name_fr || ''),
+        name_ar: String(aiRes.data.name_ar || ''),
+        name_en: String(aiRes.data.name_en || ''),
+        specs_text: String(aiRes.data.specs_text || ''),
+        description_fr: String(aiRes.data.description_fr || aiRes.data.specs_text || ''),
+        description_ar: String(aiRes.data.description_ar || ''),
+        description_en: String(aiRes.data.description_en || ''),
+        warranty_months: Number(aiRes.data.warranty_months) || 12,
+      });
+      return;
+    }
+
+    if (pathname === '/api/ai/enhance-product' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const nameFr = String(body.name_fr || '').trim();
+      const nameAr = String(body.name_ar || '').trim();
+      const brand = String(body.brand || '').trim();
+      const modelNumber = String(body.model_number || '').trim();
+      const category = String(body.category || 'Électroménager').trim();
+      const specsText = String(body.specs_text || body.description_fr || '').trim();
+
+      const settings = getSettingsMap();
+      const aiProvider = String(body.ai_provider || settings.ai_provider || 'gemini');
+      const aiApiKey = String(body.ai_api_key || settings.ai_api_key || '');
+
+      const enhancePrompt = `You are a senior e-commerce & electronics copywriter for ELECTROZEN Morocco.
+Take these extracted/raw product features and ENHANCE them into polished, compelling, well-structured commercial titles, bullet-point specifications, and detailed customer-friendly descriptions in French, Arabic, and English.
+Input data:
+- Brand: "${brand}"
+- Model: "${modelNumber}"
+- Category: "${category}"
+- Current French Name: "${nameFr}"
+- Current Arabic Name: "${nameAr}"
+- Extracted Features / Description: "${specsText}"
+
+Return ONLY strict valid JSON with keys:
+- "brand": polished brand
+- "model_number": exact model
+- "category": best matching category
+- "name_fr": punchy, SEO-friendly French product title (with capacity/power/highlights)
+- "name_ar": punchy, natural Moroccan/Modern Standard Arabic product title
+- "name_en": punchy English product title
+- "specs_text": clean, structured technical highlights separated by ' • ' (include key benefits + included accessories if mentioned)
+- "description_fr": rich, persuasive 3-4 sentence French commercial description highlighting benefits, durability, usage, and warranty
+- "description_ar": rich, persuasive 3-4 sentence Arabic commercial description
+- "description_en": rich English description`;
+
+      if (aiApiKey) {
+        const ai = await callAiProductEnrichment(aiProvider, aiApiKey, enhancePrompt);
+        if (ai.data) {
+          sendJson(res, 200, {
+            success: true,
+            source: ai.provider,
+            brand: ai.data.brand || brand,
+            model_number: ai.data.model_number || modelNumber,
+            category: ai.data.category || category,
+            name_fr: ai.data.name_fr || nameFr,
+            name_ar: ai.data.name_ar || nameAr,
+            name_en: ai.data.name_en || nameFr,
+            specs_text: ai.data.specs_text || specsText,
+            description_fr: ai.data.description_fr || specsText,
+            description_ar: ai.data.description_ar || '',
+            description_en: ai.data.description_en || '',
+          });
+          return;
+        }
+        sendJson(res, 400, { error: ai.error || 'Échec amélioration IA' });
+        return;
+      }
+
+      sendJson(res, 400, { error: 'Veuillez configurer une clé API IA dans Paramètres.' });
       return;
     }
 

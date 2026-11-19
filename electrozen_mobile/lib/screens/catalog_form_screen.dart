@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
@@ -34,7 +36,13 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
   bool _internetStatusOk = true;
   String? _loadError;
   bool _showForm = false;
+  bool _expandedDetails = false; // Quick Add by default, Expand shows all infos
+  bool _busyPhotoAi = false;
+  bool _enhancingAi = false;
   int? _editingId;
+  String _imageUrl = '';
+  final ImagePicker _picker = ImagePicker();
+  final List<Map<String, String>> _capturedBoxPhotos = [];
 
   bool get isShowingForm => _showForm;
 
@@ -57,7 +65,10 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
   String _category = 'Gros Électroménager';
   final _nameFrCtrl = TextEditingController();
   final _nameArCtrl = TextEditingController();
+  final _nameEnCtrl = TextEditingController();
   final _specsCtrl = TextEditingController();
+  final _descArCtrl = TextEditingController();
+  final _descEnCtrl = TextEditingController();
   final _costPriceCtrl = TextEditingController();
   final _wholesalePriceCtrl = TextEditingController();
   final _retailPriceCtrl = TextEditingController();
@@ -102,7 +113,10 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
     _brandCtrl.dispose();
     _nameFrCtrl.dispose();
     _nameArCtrl.dispose();
+    _nameEnCtrl.dispose();
     _specsCtrl.dispose();
+    _descArCtrl.dispose();
+    _descEnCtrl.dispose();
     _costPriceCtrl.dispose();
     _wholesalePriceCtrl.dispose();
     _retailPriceCtrl.dispose();
@@ -140,7 +154,10 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
   void _openNewWithBarcode(String barcode, {Map<String, dynamic>? prefill}) {
     setState(() {
       _showForm = true;
+      _expandedDetails = false; // Quick Add Product by default
       _editingId = null;
+      _imageUrl = (prefill?['image_url'] ?? '').toString();
+      _capturedBoxPhotos.clear();
       _barcodeCtrl.text = barcode;
       _skuCtrl.text = 'EZ-${DateTime.now().millisecondsSinceEpoch.toString().substring(8)}';
       _modelCtrl.text = (prefill?['model_number'] ?? '').toString();
@@ -149,7 +166,10 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
       if (cat.isNotEmpty) _category = cat;
       _nameFrCtrl.text = (prefill?['name_fr'] ?? '').toString();
       _nameArCtrl.text = (prefill?['name_ar'] ?? '').toString();
+      _nameEnCtrl.text = (prefill?['name_en'] ?? '').toString();
       _specsCtrl.text = (prefill?['description_fr'] ?? prefill?['specs_text'] ?? '').toString();
+      _descArCtrl.text = (prefill?['description_ar'] ?? '').toString();
+      _descEnCtrl.text = (prefill?['description_en'] ?? '').toString();
       _costPriceCtrl.text = '0';
       _wholesalePriceCtrl.text = '0';
       _retailPriceCtrl.text = '0';
@@ -161,7 +181,7 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
           _internetStatusMsg = 'Infos trouvées (${prefill['source'] ?? 'Internet'}). Complétez les prix et enregistrez.';
         } else {
           _internetStatusOk = false;
-          _internetStatusMsg = 'Introuvable sur Internet — saisissez les informations manuellement ou utilisez l\'IA.';
+          _internetStatusMsg = 'Introuvable sur Internet — saisissez manuellement ou utilisez les Photos IA.';
         }
       } else {
         _internetStatusMsg = null;
@@ -234,7 +254,10 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
   void _populateForm(Product p) {
     setState(() {
       _showForm = true;
+      _expandedDetails = false;
       _editingId = p.id;
+      _imageUrl = p.imageUrl;
+      _capturedBoxPhotos.clear();
       _barcodeCtrl.text = p.barcode;
       _skuCtrl.text = p.sku;
       _modelCtrl.text = p.modelNumber;
@@ -242,13 +265,251 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
       _category = p.category.trim().isNotEmpty ? p.category.trim() : _categories.first;
       _nameFrCtrl.text = p.nameFr;
       _nameArCtrl.text = p.nameAr;
+      _nameEnCtrl.text = p.nameEn;
       _specsCtrl.text = p.specsText;
+      _descArCtrl.text = '';
+      _descEnCtrl.text = '';
       _costPriceCtrl.text = p.currentCostPrice.toStringAsFixed(2);
       _wholesalePriceCtrl.text = p.wholesalePrice.toStringAsFixed(2);
       _retailPriceCtrl.text = p.retailPrice.toStringAsFixed(2);
       _stockCtrl.text = p.stockQuantity.toString();
       _warrantyCtrl.text = p.warrantyMonths.toString();
     });
+  }
+
+  Future<void> _uploadProductPhoto(ImageSource source) async {
+    try {
+      final file = await _picker.pickImage(source: source, maxWidth: 1400, maxHeight: 1400, imageQuality: 85);
+      if (file == null) return;
+      setState(() {
+        _busyPhotoAi = true;
+        _internetStatusOk = true;
+        _internetStatusMsg = 'Envoi de la photo produit au serveur...';
+      });
+      final bytes = await file.readAsBytes();
+      final mime = file.name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+      final uploadedUrl = await widget.api.uploadProductImage(base64Encode(bytes), mimeType: mime);
+      if (!mounted) return;
+      setState(() {
+        _imageUrl = uploadedUrl;
+        _busyPhotoAi = false;
+        _internetStatusOk = true;
+        _internetStatusMsg = 'Photo produit enregistrée et liée à la fiche !';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busyPhotoAi = false;
+        _internetStatusOk = false;
+        _internetStatusMsg = 'Erreur photo: ${e.toString().replaceFirst("Exception: ", "")}';
+      });
+    }
+  }
+
+  Future<void> _openMultiPhotoExtractorSheet() async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          Future<void> addCameraPhoto() async {
+            final file = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1600, maxHeight: 1600, imageQuality: 85);
+            if (file == null) return;
+            final bytes = await file.readAsBytes();
+            final mime = file.name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+            setSheetState(() {
+              _capturedBoxPhotos.add({'imageBase64': base64Encode(bytes), 'mimeType': mime});
+            });
+          }
+
+          Future<void> addGalleryPhotos() async {
+            final files = await _picker.pickMultiImage(maxWidth: 1600, maxHeight: 1600, imageQuality: 85);
+            if (files.isEmpty) return;
+            for (final file in files.take(4 - _capturedBoxPhotos.length)) {
+              final bytes = await file.readAsBytes();
+              final mime = file.name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+              _capturedBoxPhotos.add({'imageBase64': base64Encode(bytes), 'mimeType': mime});
+            }
+            setSheetState(() {});
+          }
+
+          Future<void> runVisionExtract() async {
+            if (_capturedBoxPhotos.isEmpty) return;
+            Navigator.pop(ctx);
+            setState(() {
+              _busyPhotoAi = true;
+              _internetStatusOk = true;
+              _internetStatusMsg = 'Analyse Vision IA de ${_capturedBoxPhotos.length} photo(s) en cours...';
+            });
+            try {
+              if (_imageUrl.isEmpty) {
+                try {
+                  final first = _capturedBoxPhotos.first;
+                  _imageUrl = await widget.api.uploadProductImage(first['imageBase64']!, mimeType: first['mimeType'] ?? 'image/jpeg');
+                } catch (_) {}
+              }
+              final res = await widget.api.extractProductFromImages(
+                _capturedBoxPhotos,
+                hintName: _nameFrCtrl.text.trim(),
+              );
+              if (!mounted) return;
+              setState(() {
+                _busyPhotoAi = false;
+                if ((res['brand'] ?? '').toString().isNotEmpty) _brandCtrl.text = res['brand'].toString();
+                if ((res['model_number'] ?? '').toString().isNotEmpty) _modelCtrl.text = res['model_number'].toString();
+                if ((res['barcode'] ?? '').toString().isNotEmpty && _barcodeCtrl.text.trim().isEmpty) {
+                  _barcodeCtrl.text = res['barcode'].toString();
+                }
+                final cat = (res['category'] ?? '').toString().trim();
+                if (cat.isNotEmpty) _category = cat;
+                if ((res['name_fr'] ?? '').toString().isNotEmpty) _nameFrCtrl.text = res['name_fr'].toString();
+                if ((res['name_ar'] ?? '').toString().isNotEmpty) _nameArCtrl.text = res['name_ar'].toString();
+                if ((res['name_en'] ?? '').toString().isNotEmpty) _nameEnCtrl.text = res['name_en'].toString();
+                final desc = (res['description_fr'] ?? res['specs_text'] ?? '').toString();
+                if (desc.isNotEmpty) _specsCtrl.text = desc;
+                if ((res['description_ar'] ?? '').toString().isNotEmpty) _descArCtrl.text = res['description_ar'].toString();
+                if ((res['description_en'] ?? '').toString().isNotEmpty) _descEnCtrl.text = res['description_en'].toString();
+                if ((res['warranty_months'] as num?) != null) _warrantyCtrl.text = '${(res['warranty_months'] as num).toInt()}';
+                _internetStatusOk = true;
+                _internetStatusMsg = 'Fiche extraite depuis ${_capturedBoxPhotos.length} photo(s) (${res['source']?.toString().toUpperCase()}) !';
+              });
+            } catch (e) {
+              if (!mounted) return;
+              setState(() {
+                _busyPhotoAi = false;
+                _internetStatusOk = false;
+                _internetStatusMsg = e.toString().replaceFirst('Exception: ', '');
+              });
+            }
+          }
+
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Extraire Infos Produit depuis Photos (Boîte / Étiquette)',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Prenez 1 à 4 photos (face avant avec marque/modèle + côté avec caractéristiques). La 1ère photo sera aussi attachée comme image du produit.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF667085)),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203361), foregroundColor: Colors.white),
+                          onPressed: _capturedBoxPhotos.length >= 4 ? null : addCameraPhoto,
+                          icon: const Icon(Icons.camera_alt_outlined, size: 18),
+                          label: const Text('Prendre Photo'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _capturedBoxPhotos.length >= 4 ? null : addGalleryPhotos,
+                          icon: const Icon(Icons.photo_library_outlined, size: 18),
+                          label: const Text('Galerie (Multi)'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_capturedBoxPhotos.isNotEmpty) ...[
+                    SizedBox(
+                      height: 82,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _capturedBoxPhotos.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (_, i) {
+                          final bytes = base64Decode(_capturedBoxPhotos[i]['imageBase64']!);
+                          return Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.memory(bytes, width: 82, height: 82, fit: BoxFit.cover),
+                              ),
+                              Positioned(
+                                right: 2,
+                                top: 2,
+                                child: InkWell(
+                                  onTap: () => setSheetState(() => _capturedBoxPhotos.removeAt(i)),
+                                  child: const CircleAvatar(
+                                    radius: 11,
+                                    backgroundColor: Colors.black87,
+                                    child: Icon(Icons.close, size: 13, color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6D28D9), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 13)),
+                    onPressed: _capturedBoxPhotos.isEmpty ? null : runVisionExtract,
+                    icon: const Icon(Icons.auto_awesome, size: 18),
+                    label: Text('Extraire Fiche Produit (${_capturedBoxPhotos.length} photo${_capturedBoxPhotos.length > 1 ? "s" : ""})'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _runAiEnhance() async {
+    if (_nameFrCtrl.text.trim().isEmpty && _specsCtrl.text.trim().isEmpty && _brandCtrl.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Extrayez ou saisissez au moins un nom, marque ou caractéristique avant d\'améliorer.')),
+      );
+      return;
+    }
+    setState(() => _enhancingAi = true);
+    try {
+      final res = await widget.api.enhanceProductWithAi(
+        nameFr: _nameFrCtrl.text.trim(),
+        nameAr: _nameArCtrl.text.trim(),
+        brand: _brandCtrl.text.trim(),
+        modelNumber: _modelCtrl.text.trim(),
+        category: _category,
+        specsText: _specsCtrl.text.trim(),
+        descriptionFr: _specsCtrl.text.trim(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _enhancingAi = false;
+        if ((res['brand'] ?? '').toString().isNotEmpty) _brandCtrl.text = res['brand'].toString();
+        if ((res['model_number'] ?? '').toString().isNotEmpty) _modelCtrl.text = res['model_number'].toString();
+        final cat = (res['category'] ?? '').toString().trim();
+        if (cat.isNotEmpty) _category = cat;
+        if ((res['name_fr'] ?? '').toString().isNotEmpty) _nameFrCtrl.text = res['name_fr'].toString();
+        if ((res['name_ar'] ?? '').toString().isNotEmpty) _nameArCtrl.text = res['name_ar'].toString();
+        if ((res['name_en'] ?? '').toString().isNotEmpty) _nameEnCtrl.text = res['name_en'].toString();
+        final enhancedDesc = (res['description_fr'] ?? res['specs_text'] ?? '').toString();
+        if (enhancedDesc.isNotEmpty) _specsCtrl.text = enhancedDesc;
+        if ((res['description_ar'] ?? '').toString().isNotEmpty) _descArCtrl.text = res['description_ar'].toString();
+        if ((res['description_en'] ?? '').toString().isNotEmpty) _descEnCtrl.text = res['description_en'].toString();
+        _internetStatusOk = true;
+        _internetStatusMsg = 'Caractéristiques & descriptions améliorées par ${res['source']?.toString().toUpperCase() ?? 'IA'} !';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _enhancingAi = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erreur IA Enhance: ${e.toString().replaceFirst("Exception: ", "")}')));
+    }
   }
 
   Future<void> _runAiGenerate() async {
@@ -280,6 +541,11 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
   }
 
   Future<void> _saveProduct() async {
+    final retailVal = double.tryParse(_retailPriceCtrl.text.replaceAll(',', '.')) ?? 0;
+    final wholesaleParsed = double.tryParse(_wholesalePriceCtrl.text.replaceAll(',', '.')) ?? 0;
+    final wholesaleVal = wholesaleParsed > 0 ? wholesaleParsed : retailVal;
+    final costVal = double.tryParse(_costPriceCtrl.text.replaceAll(',', '.')) ?? 0;
+
     final payload = {
       'barcode': _barcodeCtrl.text.trim(),
       'sku': _skuCtrl.text.trim(),
@@ -288,11 +554,16 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
       'category': _category,
       'name_fr': _nameFrCtrl.text.trim(),
       'name_ar': _nameArCtrl.text.trim(),
+      'name_en': _nameEnCtrl.text.trim(),
+      'description_fr': _specsCtrl.text.trim(),
+      'description_ar': _descArCtrl.text.trim(),
+      'description_en': _descEnCtrl.text.trim(),
       'specs_text': _specsCtrl.text.trim(),
-      'current_cost_price': double.tryParse(_costPriceCtrl.text) ?? 0,
-      'last_cost_price': double.tryParse(_costPriceCtrl.text) ?? 0,
-      'wholesale_price': double.tryParse(_wholesalePriceCtrl.text) ?? 0,
-      'retail_price': double.tryParse(_retailPriceCtrl.text) ?? 0,
+      'image_url': _imageUrl.trim(),
+      'current_cost_price': costVal,
+      'last_cost_price': costVal,
+      'wholesale_price': wholesaleVal,
+      'retail_price': retailVal,
       'stock_quantity': int.tryParse(_stockCtrl.text) ?? 0,
       'warranty_months': int.tryParse(_warrantyCtrl.text) ?? 12,
     };
@@ -343,6 +614,7 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Header
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -357,8 +629,8 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          _editingId == null ? 'NOUVEAU PRODUIT' : 'MODIFIER PRODUIT #$_editingId',
-                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                          _editingId == null ? 'AJOUT RAPIDE PRODUIT' : 'MODIFIER PRODUIT #$_editingId',
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
                         ),
                       ],
                     ),
@@ -369,6 +641,96 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+
+                // Product Image + Vision Box Photos Card
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF161F33) : const Color(0xFFF5F3FF),
+                    border: Border.all(color: isDark ? const Color(0xFF3730A3) : const Color(0xFFDDD6FE)),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 58,
+                            height: 58,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: borderColor),
+                            ),
+                            child: _imageUrl.isNotEmpty
+                                ? ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.network(
+                                      _imageUrl.startsWith('http') ? _imageUrl : '${widget.api.baseUrl}$_imageUrl',
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (_, __, ___) => const Icon(Icons.image_outlined, color: Colors.grey),
+                                    ),
+                                  )
+                                : const Icon(Icons.add_a_photo_outlined, color: Color(0xFF6D28D9)),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Photo Produit & Lecture Boîte IA',
+                                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: Color(0xFF5B21B6)),
+                                ),
+                                const SizedBox(height: 2),
+                                const Text(
+                                  'Ajoutez une image ou photographiez la boîte pour remplir marque, modèle et fiche.',
+                                  style: TextStyle(fontSize: 11, color: Color(0xFF667085)),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF6D28D9),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            ),
+                            onPressed: _busyPhotoAi ? null : _openMultiPhotoExtractorSheet,
+                            icon: const Icon(Icons.auto_awesome, size: 16),
+                            label: const Text('Lire Photos Boîte (IA)', style: TextStyle(fontSize: 12)),
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                            onPressed: _busyPhotoAi ? null : () => _uploadProductPhoto(ImageSource.camera),
+                            icon: const Icon(Icons.camera_alt_outlined, size: 16),
+                            label: const Text('Caméra', style: TextStyle(fontSize: 12)),
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                            onPressed: _busyPhotoAi ? null : () => _uploadProductPhoto(ImageSource.gallery),
+                            icon: const Icon(Icons.photo_library_outlined, size: 16),
+                            label: const Text('Galerie', style: TextStyle(fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                      if (_busyPhotoAi) ...[
+                        const SizedBox(height: 8),
+                        const LinearProgressIndicator(),
+                      ],
+                    ],
+                  ),
+                ),
+
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -409,11 +771,13 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                   ),
                 ],
                 const SizedBox(height: 10),
-                _field(_skuCtrl, 'SKU Interne', mono: true),
+
+                // QUICK ADD CORE FIELDS
+                _field(_nameFrCtrl, 'Désignation Produit (FR) *'),
                 const SizedBox(height: 10),
                 Row(
                   children: [
-                    Expanded(child: _field(_brandCtrl, 'Marque (ex: Samsung, LG)')),
+                    Expanded(child: _field(_brandCtrl, 'Marque *')),
                     const SizedBox(width: 8),
                     Expanded(child: _field(_modelCtrl, 'Modèle Exact', mono: true)),
                   ],
@@ -439,44 +803,96 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                     if (v != null) setState(() => _category = v);
                   },
                 ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: OutlinedButton(
-                    onPressed: _runAiGenerate,
-                    child: const Text('Générer Fiche FR/AR par IA'),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                _field(_nameFrCtrl, 'Désignation Produit (FR)'),
                 const SizedBox(height: 10),
-                _field(_nameArCtrl, 'Désignation Produit (AR)'),
-                const SizedBox(height: 10),
-                _field(_specsCtrl, 'Caractéristiques Techniques', maxLines: 2),
-                const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(child: _field(_costPriceCtrl, 'Coût Achat (MAD)', numeric: true, mono: true)),
                     const SizedBox(width: 8),
-                    Expanded(child: _field(_wholesalePriceCtrl, 'Prix Gros (MAD)', numeric: true, mono: true)),
-                    const SizedBox(width: 8),
                     Expanded(child: _field(_retailPriceCtrl, 'Prix Détail (MAD)', numeric: true, mono: true)),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(child: _field(_stockCtrl, 'Stock Quantité', numeric: true, mono: true)),
                     const SizedBox(width: 8),
-                    Expanded(child: _field(_warrantyCtrl, 'Garantie (Mois)', numeric: true, mono: true)),
+                    Expanded(child: _field(_stockCtrl, 'Stock', numeric: true, mono: true)),
                   ],
                 ),
                 const SizedBox(height: 10),
-                _field(
-                  _newSerialCtrl,
-                  'Ajouter Numéros de Série / IMEI (séparés par virgule)',
-                  mono: true,
+
+                // AI Enhance + Features Row
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Caractéristiques & Description', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Color(0xFF667085))),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1C61E7),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        minimumSize: const Size(0, 32),
+                      ),
+                      onPressed: _enhancingAi ? null : _runAiEnhance,
+                      icon: _enhancingAi
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.auto_fix_high, size: 15),
+                      label: Text(_enhancingAi ? 'IA...' : 'Améliorer IA', style: const TextStyle(fontSize: 11.5)),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 6),
+                _field(_specsCtrl, 'Caractéristiques extraites / Description FR', maxLines: 3),
+
+                const SizedBox(height: 10),
+
+                // EXPAND / COLLAPSE ALL OTHER INFOS BUTTON
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF5B21B6),
+                    side: const BorderSide(color: Color(0xFFD8B4FE)),
+                    backgroundColor: isDark ? const Color(0xFF1E1B4B) : const Color(0xFFFAF5FF),
+                  ),
+                  onPressed: () => setState(() => _expandedDetails = !_expandedDetails),
+                  icon: Icon(_expandedDetails ? Icons.expand_less : Icons.expand_more, size: 20),
+                  label: Text(
+                    _expandedDetails
+                        ? 'Réduire (Mode Ajout Rapide)'
+                        : 'Afficher toutes les infos (Prix Gros, AR/EN, SKU, Garantie, Séries)',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ),
+
+                if (_expandedDetails) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(child: _field(_wholesalePriceCtrl, 'Prix Gros (MAD)', numeric: true, mono: true)),
+                      const SizedBox(width: 8),
+                      Expanded(child: _field(_warrantyCtrl, 'Garantie (Mois)', numeric: true, mono: true)),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _field(_skuCtrl, 'SKU Interne', mono: true),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: OutlinedButton.icon(
+                      onPressed: _runAiGenerate,
+                      icon: const Icon(Icons.translate, size: 16),
+                      label: const Text('Générer Titres FR/AR/EN par IA'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _field(_nameArCtrl, 'Désignation Produit (AR)'),
+                  const SizedBox(height: 10),
+                  _field(_nameEnCtrl, 'English Name'),
+                  const SizedBox(height: 10),
+                  _field(_descArCtrl, 'Description (AR)', maxLines: 2),
+                  const SizedBox(height: 10),
+                  _field(_descEnCtrl, 'Description (EN)', maxLines: 2),
+                  const SizedBox(height: 10),
+                  _field(
+                    _newSerialCtrl,
+                    'Ajouter Numéros de Série / IMEI (séparés par virgule)',
+                    mono: true,
+                  ),
+                ],
+
                 const SizedBox(height: 14),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(

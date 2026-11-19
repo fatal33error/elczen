@@ -143,6 +143,8 @@ const state = {
   salesSearch: '',
   salesStatusFilter: 'all',
   salesPayFilter: 'all',
+  productModalExpanded: false,
+  productPhotoAiLoading: false,
   customerLedger: null,
   freePaymentAmount: '',
   inspectorOpen: false,
@@ -2500,24 +2502,53 @@ function renderProductModal() {
   const ep = state.editingProduct || state.prefillProduct;
   const randomBarcode = ep?.barcode || '';
   const aiEngine = (state.settings?.ai_provider || 'gemini').toUpperCase();
+  const expanded = Boolean(state.productModalExpanded || state.editingProduct);
 
   return `
     <div class="modal-backdrop">
       <div class="modal-box">
         <div class="modal-header">
           <span style="font-weight:600;font-size:13.5px;color:var(--ink-900)">
-            ${state.editingProduct ? `Modifier l'article : ${state.editingProduct.name_fr}` : 'Nouvel Article (Scan / Internet / Manuel)'}
+            ${state.editingProduct ? `Modifier l'article : ${state.editingProduct.name_fr}` : 'Ajout Rapide Article (Quick Add / Photos IA)'}
           </span>
-          <button class="btn btn-sm" id="btn-close-prod-modal">Fermer</button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button type="button" class="btn btn-sm" id="btn-toggle-prod-expand" style="background:#f3e8ff;color:#5b21b6;border-color:#d8b4fe;font-weight:700">
+              ${expanded ? '▲ Mode Rapide (Réduire)' : '▼ Plus d’infos (AR, EN, Gros, Garantie...)'}
+            </button>
+            <button class="btn btn-sm" id="btn-close-prod-modal">Fermer</button>
+          </div>
         </div>
-        <form id="form-product-modal" class="modal-body" style="display:flex;flex-direction:column;gap:14px">
-          <div style="padding:12px;background:var(--panel-subtle);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;gap:8px">
-            <label class="field-label" style="margin:0">Scanner ou Saisir le Code-Barres EAN *</label>
+        <form id="form-product-modal" class="modal-body" style="display:flex;flex-direction:column;gap:12px">
+          <input type="hidden" name="image_url" id="prod-image-url" value="${ep?.image_url || ''}" />
+
+          <!-- Quick Photo + Vision Extract Bar -->
+          <div style="padding:12px;background:linear-gradient(135deg,#faf5ff 0%,#f8fafc 100%);border:1px solid #d8b4fe;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:10px">
+              ${
+                ep?.image_url
+                  ? `<img id="prod-preview-img" src="${ep.image_url}" style="width:52px;height:52px;object-fit:contain;border-radius:8px;background:#fff;border:1px solid var(--border)" alt="" />`
+                  : `<div id="prod-preview-placeholder" style="width:52px;height:52px;border-radius:8px;background:#fff;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;font-size:10px;color:#64748b">Photo</div>`
+              }
+              <div>
+                <div style="font-weight:700;font-size:12.5px;color:#5b21b6">Image & Extraction Produit par Photos (IA)</div>
+                <div style="font-size:11px;color:#64748b">Importez 1 ou 2 photos de la boîte/étiquette : l’IA lit marque, modèle et caractéristiques.</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <label class="btn btn-sm btn-dark" style="cursor:pointer;margin:0">
+                <input type="file" id="input-prod-photos-ai" accept="image/*" multiple style="display:none" />
+                <span>${state.productPhotoAiLoading ? 'Analyse photos...' : 'Importer Photo(s) + Extraire IA'}</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Barcode Row -->
+          <div style="padding:10px 12px;background:var(--panel-subtle);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;gap:8px">
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-              <input name="barcode" id="prod-barcode" required class="input mono" style="flex:1;min-width:200px" placeholder="Scannez (douchette/caméra) ou saisissez EAN..." value="${randomBarcode}" />
-              <button type="button" class="btn btn-dark" id="btn-internet-lookup">${ICONS.sync}<span>Chercher sur Internet</span></button>
-              <button type="button" class="btn" id="btn-camera-barcode-modal">${ICONS.barcode}<span>${state.cameraScanActive ? 'Fermer Caméra' : 'Scanner Caméra'}</span></button>
-              <button type="button" class="btn" id="btn-gen-ean">Générer EAN</button>
+              <input name="barcode" id="prod-barcode" required class="input mono" style="flex:1;min-width:190px" placeholder="Code-barres EAN (scan douchette / caméra / manuel)..." value="${randomBarcode}" />
+              <button type="button" class="btn btn-sm btn-dark" id="btn-internet-lookup">${ICONS.sync}<span>Internet</span></button>
+              <button type="button" class="btn btn-sm" id="btn-camera-barcode-modal">${ICONS.barcode}<span>${state.cameraScanActive ? 'Fermer Caméra' : 'Caméra'}</span></button>
+              <button type="button" class="btn btn-sm" id="btn-gen-ean">Auto EAN</button>
             </div>
             ${
               state.cameraScanActive
@@ -2529,65 +2560,79 @@ function renderProductModal() {
             }
             ${
               state.internetLookupBanner
-                ? `<div style="padding:8px 10px;border-radius:8px;font-size:12px;font-weight:600;background:${state.internetLookupBanner.ok ? 'rgba(57,174,82,0.12)' : 'rgba(255,193,8,0.16)'};color:${state.internetLookupBanner.ok ? '#166534' : '#92400e'};border:1px solid ${state.internetLookupBanner.ok ? 'rgba(57,174,82,0.35)' : 'rgba(255,193,8,0.4)'}">
+                ? `<div style="padding:7px 10px;border-radius:8px;font-size:11.5px;font-weight:600;background:${state.internetLookupBanner.ok ? 'rgba(57,174,82,0.12)' : 'rgba(255,193,8,0.16)'};color:${state.internetLookupBanner.ok ? '#166534' : '#92400e'};border:1px solid ${state.internetLookupBanner.ok ? 'rgba(57,174,82,0.35)' : 'rgba(255,193,8,0.4)'}">
                     ${state.internetLookupBanner.msg}
                   </div>`
                 : ''
             }
           </div>
 
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+          <!-- QUICK ADD CORE FIELDS -->
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px">
+            <div>
+              <label class="field-label">Désignation Produit (FR) *</label>
+              <input name="name_fr" id="prod-name-fr" required class="input" placeholder="Ex: Four Électrique SONIC 45L FE5022SC..." value="${ep?.name_fr || ''}" />
+            </div>
             <div>
               <label class="field-label">Marque *</label>
-              <input name="brand" id="prod-brand" required class="input" placeholder="Ex: Samsung, TCL..." value="${ep?.brand || ''}" />
+              <input name="brand" id="prod-brand" required class="input" placeholder="Ex: SONIC, LG, TCL..." value="${ep?.brand || ''}" />
             </div>
             <div>
-              <label class="field-label">Référence Modèle</label>
-              <input name="model_number" id="prod-model" class="input mono" placeholder="Ex: 55C655" value="${ep?.model_number || ''}" />
-            </div>
-            <div>
-              <label class="field-label">Famille / Catégorie</label>
-              <input name="category" id="prod-category" class="input" value="${ep?.category || 'Gros Électroménager'}" />
+              <label class="field-label">Modèle</label>
+              <input name="model_number" id="prod-model" class="input mono" placeholder="Ex: FE5022SC" value="${ep?.model_number || ''}" />
             </div>
           </div>
 
-          <div style="padding:12px;background:var(--panel-subtle);border:1px solid var(--border);border-radius:10px;display:grid;grid-template-columns:repeat(6,1fr);gap:10px">
+          <div style="padding:12px;background:var(--panel-subtle);border:1px solid var(--border);border-radius:10px;display:grid;grid-template-columns:1.4fr 1fr 1fr 0.8fr;gap:10px">
             <div>
-              <label class="field-label">Coût Achat *</label>
-              <input name="current_cost_price" type="number" step="0.01" required class="input mono" value="${ep?.current_cost_price ?? 0}" />
+              <label class="field-label">Catégorie</label>
+              <input name="category" id="prod-category" class="input" value="${ep?.category || 'Petit Électroménager'}" />
             </div>
             <div>
-              <label class="field-label">Dernier Coût</label>
-              <input name="last_cost_price" type="number" step="0.01" class="input mono" value="${ep?.last_cost_price ?? 0}" />
+              <label class="field-label">Coût Achat (MAD) *</label>
+              <input name="current_cost_price" id="prod-cost-price" type="number" step="0.01" required class="input mono" value="${ep?.current_cost_price ?? 0}" />
             </div>
             <div>
-              <label class="field-label">Prix Gros *</label>
-              <input name="wholesale_price" type="number" step="0.01" required class="input mono" value="${ep?.wholesale_price ?? 0}" />
+              <label class="field-label">Prix Détail (MAD) *</label>
+              <input name="retail_price" id="prod-retail-price" type="number" step="0.01" required class="input mono" value="${ep?.retail_price ?? 0}" />
             </div>
             <div>
-              <label class="field-label">Prix Détail *</label>
-              <input name="retail_price" type="number" step="0.01" required class="input mono" value="${ep?.retail_price ?? 0}" />
-            </div>
-            <div>
-              <label class="field-label">Stock</label>
-              <input name="stock_quantity" type="number" required class="input mono" value="${ep?.stock_quantity ?? 1}" />
-            </div>
-            <div>
-              <label class="field-label">Garantie (Mois)</label>
-              <input name="warranty_months" type="number" required class="input mono" value="${ep?.warranty_months ?? 12}" />
+              <label class="field-label">Stock *</label>
+              <input name="stock_quantity" id="prod-stock-qty" type="number" required class="input mono" value="${ep?.stock_quantity ?? 1}" />
             </div>
           </div>
 
-          <div style="padding:12px;border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;gap:10px">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-              <span style="font-weight:600;font-size:12px;color:var(--ink-900)">Désignations & Fiche Technique (FR / AR / EN)</span>
-              <button type="button" class="btn btn-sm btn-dark" id="btn-ai-fill">Pré-remplir via IA (${aiEngine})</button>
+          <!-- AI Enhance Bar (Always handy even in Quick Mode) -->
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:11.5px;color:var(--ink-500)">Caractéristiques & Descriptions (FR / AR / EN)</span>
+            <div style="display:flex;gap:8px">
+              <button type="button" class="btn btn-sm" id="btn-ai-fill">Générer Fiche (${aiEngine})</button>
+              <button type="button" class="btn btn-sm btn-primary" id="btn-ai-enhance">Améliorer avec IA (Enhance)</button>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+          </div>
+
+          <div>
+            <textarea name="description_fr" id="prod-desc-fr" rows="2" class="input" placeholder="Caractéristiques extraites ou description (cliquez sur Améliorer avec IA pour enrichir)...">${ep?.description_fr || ''}</textarea>
+          </div>
+
+          <!-- EXPANDABLE FULL DETAILS -->
+          <div style="display:${expanded ? 'flex' : 'none'};flex-direction:column;gap:10px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel-subtle)">
+            <div style="font-weight:700;font-size:11.5px;color:var(--ink-700)">INFORMATIONS COMPLÉMENTAIRES & TARIFS AVANCÉS</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
               <div>
-                <label class="field-label">Désignation (FR) *</label>
-                <input name="name_fr" id="prod-name-fr" required class="input" value="${ep?.name_fr || ''}" />
+                <label class="field-label">Prix Gros (MAD)</label>
+                <input name="wholesale_price" id="prod-wholesale-price" type="number" step="0.01" class="input mono" value="${ep?.wholesale_price ?? 0}" />
               </div>
+              <div>
+                <label class="field-label">Dernier Coût Achat</label>
+                <input name="last_cost_price" type="number" step="0.01" class="input mono" value="${ep?.last_cost_price ?? 0}" />
+              </div>
+              <div>
+                <label class="field-label">Garantie (Mois)</label>
+                <input name="warranty_months" id="prod-warranty" type="number" class="input mono" value="${ep?.warranty_months ?? 12}" />
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
               <div dir="rtl">
                 <label class="field-label">الاسم بالعربية</label>
                 <input name="name_ar" id="prod-name-ar" class="input" value="${ep?.name_ar || ''}" />
@@ -2597,14 +2642,20 @@ function renderProductModal() {
                 <input name="name_en" id="prod-name-en" class="input" value="${ep?.name_en || ''}" />
               </div>
             </div>
-            <div>
-              <label class="field-label">Description Technique (WooCommerce)</label>
-              <textarea name="description_fr" id="prod-desc-fr" rows="2" class="input">${ep?.description_fr || ''}</textarea>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div dir="rtl">
+                <label class="field-label">الوصف بالعربية</label>
+                <textarea name="description_ar" id="prod-desc-ar" rows="2" class="input">${ep?.description_ar || ''}</textarea>
+              </div>
+              <div>
+                <label class="field-label">English Description</label>
+                <textarea name="description_en" id="prod-desc-en" rows="2" class="input">${ep?.description_en || ''}</textarea>
+              </div>
             </div>
           </div>
 
-          <div style="display:flex;justify-content:flex-end;gap:8px">
-            <button type="submit" class="btn btn-dark">Enregistrer l'Article</button>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px">
+            <button type="submit" class="btn btn-dark" style="padding:10px 20px">Enregistrer l'Article</button>
           </div>
         </form>
       </div>
@@ -3254,6 +3305,92 @@ function attachEvents() {
     };
   });
 
+  const btnToggleProdExpand = document.getElementById('btn-toggle-prod-expand');
+  if (btnToggleProdExpand) {
+    btnToggleProdExpand.onclick = () => {
+      state.productModalExpanded = !state.productModalExpanded;
+      render();
+    };
+  }
+
+  const inpProdPhotosAi = document.getElementById('input-prod-photos-ai');
+  if (inpProdPhotosAi) {
+    inpProdPhotosAi.onchange = async (e) => {
+      const files = Array.from(e.target.files || []).slice(0, 4);
+      if (files.length === 0) return;
+      state.productPhotoAiLoading = true;
+      render();
+      try {
+        const readAsB64 = (file) =>
+          new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({ imageBase64: String(reader.result || ''), mimeType: file.type || 'image/jpeg' });
+            reader.readAsDataURL(file);
+          });
+        const images = await Promise.all(files.map(readAsB64));
+        // Upload first photo as product image
+        let uploadedImageUrl = state.prefillProduct?.image_url || state.editingProduct?.image_url || '';
+        try {
+          const upRes = await fetch('/api/products/upload-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(images[0]),
+          });
+          if (upRes.ok) {
+            const upData = await upRes.json();
+            if (upData.image_url) uploadedImageUrl = upData.image_url;
+          }
+        } catch {}
+
+        // Extract product info from photos via AI Vision
+        const exRes = await fetch('/api/ai/extract-product-from-images', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ images }),
+        });
+        const exData = await exRes.json();
+        state.productPhotoAiLoading = false;
+        if (exRes.ok && exData.success) {
+          const targetObj = state.editingProduct || state.prefillProduct || {};
+          const updated = {
+            ...targetObj,
+            barcode: exData.barcode || targetObj.barcode || document.getElementById('prod-barcode')?.value || '',
+            brand: exData.brand || targetObj.brand || '',
+            model_number: exData.model_number || targetObj.model_number || '',
+            category: exData.category || targetObj.category || 'Petit Électroménager',
+            name_fr: exData.name_fr || targetObj.name_fr || '',
+            name_ar: exData.name_ar || targetObj.name_ar || '',
+            name_en: exData.name_en || targetObj.name_en || '',
+            description_fr: exData.description_fr || exData.specs_text || targetObj.description_fr || '',
+            description_ar: exData.description_ar || targetObj.description_ar || '',
+            description_en: exData.description_en || targetObj.description_en || '',
+            warranty_months: exData.warranty_months || targetObj.warranty_months || 12,
+            image_url: uploadedImageUrl,
+          };
+          if (state.editingProduct) state.editingProduct = updated;
+          else state.prefillProduct = updated;
+          state.internetLookupBanner = {
+            ok: true,
+            msg: `Extraction Vision (${String(exData.source || 'AI').toUpperCase()}) réussie depuis ${images.length} photo(s) !`,
+          };
+        } else {
+          if (uploadedImageUrl) {
+            if (state.editingProduct) state.editingProduct.image_url = uploadedImageUrl;
+            else state.prefillProduct = { ...(state.prefillProduct || {}), image_url: uploadedImageUrl };
+          }
+          state.internetLookupBanner = {
+            ok: false,
+            msg: `Photo enregistrée. Note IA : ${exData.error || 'complétez manuellement.'}`,
+          };
+        }
+      } catch (err) {
+        state.productPhotoAiLoading = false;
+        state.internetLookupBanner = { ok: false, msg: `Erreur analyse photo : ${err.message}` };
+      }
+      render();
+    };
+  }
+
   const btnCloseProdModal = document.getElementById('btn-close-prod-modal');
   if (btnCloseProdModal) {
     btnCloseProdModal.onclick = () => {
@@ -3263,6 +3400,7 @@ function attachEvents() {
       }
       state.cameraScanActive = false;
       state.productModalOpen = false;
+      state.productModalExpanded = false;
       state.prefillProduct = null;
       state.internetLookupBanner = null;
       render();
@@ -3437,10 +3575,56 @@ function attachEvents() {
         if (ai.brand && !document.getElementById('prod-brand').value) document.getElementById('prod-brand').value = ai.brand;
         if (ai.model_number && !document.getElementById('prod-model').value) document.getElementById('prod-model').value = ai.model_number;
         document.getElementById('prod-name-fr').value = ai.name_fr || '';
-        document.getElementById('prod-name-ar').value = ai.name_ar || '';
-        document.getElementById('prod-name-en').value = ai.name_en || '';
+        if (document.getElementById('prod-name-ar')) document.getElementById('prod-name-ar').value = ai.name_ar || '';
+        if (document.getElementById('prod-name-en')) document.getElementById('prod-name-en').value = ai.name_en || '';
         document.getElementById('prod-desc-fr').value = ai.description_fr || '';
+        if (document.getElementById('prod-desc-ar')) document.getElementById('prod-desc-ar').value = ai.description_ar || '';
+        if (document.getElementById('prod-desc-en')) document.getElementById('prod-desc-en').value = ai.description_en || '';
         showToast(`Fiches générées (${String(ai.source || 'template').toUpperCase()})`);
+      }
+    };
+  }
+
+  const btnAiEnhance = document.getElementById('btn-ai-enhance');
+  if (btnAiEnhance) {
+    btnAiEnhance.onclick = async () => {
+      const origText = btnAiEnhance.textContent;
+      btnAiEnhance.textContent = 'Amélioration IA...';
+      btnAiEnhance.disabled = true;
+      try {
+        const res = await fetch('/api/ai/enhance-product', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name_fr: document.getElementById('prod-name-fr')?.value || '',
+            name_ar: document.getElementById('prod-name-ar')?.value || '',
+            brand: document.getElementById('prod-brand')?.value || '',
+            model_number: document.getElementById('prod-model')?.value || '',
+            category: document.getElementById('prod-category')?.value || '',
+            description_fr: document.getElementById('prod-desc-fr')?.value || '',
+            specs_text: document.getElementById('prod-desc-fr')?.value || '',
+          }),
+        });
+        const ai = await res.json();
+        if (res.ok && ai.success) {
+          if (ai.brand) document.getElementById('prod-brand').value = ai.brand;
+          if (ai.model_number) document.getElementById('prod-model').value = ai.model_number;
+          if (ai.category) document.getElementById('prod-category').value = ai.category;
+          if (ai.name_fr) document.getElementById('prod-name-fr').value = ai.name_fr;
+          if (ai.name_ar && document.getElementById('prod-name-ar')) document.getElementById('prod-name-ar').value = ai.name_ar;
+          if (ai.name_en && document.getElementById('prod-name-en')) document.getElementById('prod-name-en').value = ai.name_en;
+          document.getElementById('prod-desc-fr').value = ai.description_fr || ai.specs_text || '';
+          if (ai.description_ar && document.getElementById('prod-desc-ar')) document.getElementById('prod-desc-ar').value = ai.description_ar;
+          if (ai.description_en && document.getElementById('prod-desc-en')) document.getElementById('prod-desc-en').value = ai.description_en;
+          showToast(`Descriptions & caractéristiques améliorées par ${String(ai.source || 'IA').toUpperCase()} !`);
+        } else {
+          showToast(ai.error || 'Impossible d’améliorer via IA');
+        }
+      } catch (err) {
+        showToast('Erreur réseau IA');
+      } finally {
+        btnAiEnhance.textContent = origText;
+        btnAiEnhance.disabled = false;
       }
     };
   }
@@ -3451,6 +3635,9 @@ function attachEvents() {
       e.preventDefault();
       const fd = new FormData(formProdModal);
       const payload = Object.fromEntries(fd.entries());
+      if (!Number(payload.wholesale_price)) {
+        payload.wholesale_price = payload.retail_price;
+      }
       const url = state.editingProduct
         ? `/api/products/${state.editingProduct.id}`
         : '/api/products';
@@ -3467,6 +3654,7 @@ function attachEvents() {
         }
         state.cameraScanActive = false;
         state.productModalOpen = false;
+        state.productModalExpanded = false;
         state.prefillProduct = null;
         state.internetLookupBanner = null;
         await loadAllData();
