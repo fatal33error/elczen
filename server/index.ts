@@ -134,7 +134,7 @@ async function callAiProductEnrichment(
       contentText = json?.choices?.[0]?.message?.content || '';
     } else {
       const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${encodeURIComponent(key)}`,
         {
           method: 'POST',
           signal: controller.signal,
@@ -265,7 +265,7 @@ Rules:
         parts.push({ inline_data: { mime_type: mimeType || 'image/jpeg', data: cleanB64 } });
       }
       const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${encodeURIComponent(key)}`,
         {
           method: 'POST',
           signal: controller.signal,
