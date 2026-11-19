@@ -138,22 +138,8 @@ class ElectroZenApiService {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_prefProductsCacheKey);
       if (raw == null || raw.isEmpty) return [];
-      final dynamic decoded = jsonDecode(raw);
-      if (decoded is! List) return [];
-      final products = <Product>[];
-      for (var item in decoded) {
-        if (item is String) {
-          try {
-            item = jsonDecode(item);
-          } catch (_) {}
-        }
-        if (item is Map) {
-          try {
-            products.add(Product.fromJson(Map<String, dynamic>.from(item)));
-          } catch (_) {}
-        }
-      }
-      return products;
+      final list = jsonDecode(raw) as List;
+      return list.map((e) => Product.fromJson(Map<String, dynamic>.from(e as Map))).toList();
     } catch (_) {
       return [];
     }
@@ -181,10 +167,7 @@ class ElectroZenApiService {
       }
       isOnline.value = true;
       lastLatencyMs.value = stopwatch.elapsedMilliseconds;
-      final dynamic decoded = jsonDecode(response.body);
-      final Map<String, dynamic> data = decoded is Map
-          ? Map<String, dynamic>.from(decoded)
-          : <String, dynamic>{};
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
       final issuedToken = (data['accessToken'] ?? '').toString();
       if (issuedToken.isNotEmpty) {
         await saveConfig(
@@ -224,9 +207,8 @@ class ElectroZenApiService {
       if (response.statusCode != 200) {
         throw Exception('Server error (${response.statusCode})');
       }
-      final dynamic decoded = jsonDecode(response.body);
-      if (decoded is! Map) return null;
-      return Product.fromJson(Map<String, dynamic>.from(decoded));
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return Product.fromJson(data);
     } catch (_) {
       isOnline.value = false;
       // Offline fallback from local catalog cache
@@ -262,24 +244,8 @@ class ElectroZenApiService {
       if (query.isEmpty) {
         await _cacheProductsJson(response.body);
       }
-      final dynamic decoded = jsonDecode(response.body);
-      if (decoded is! List) {
-        throw Exception('Réponse inattendue: format de liste attendu');
-      }
-      final products = <Product>[];
-      for (var item in decoded) {
-        if (item is String) {
-          try {
-            item = jsonDecode(item);
-          } catch (_) {}
-        }
-        if (item is Map) {
-          try {
-            products.add(Product.fromJson(Map<String, dynamic>.from(item)));
-          } catch (_) {}
-        }
-      }
-      return products;
+      final list = jsonDecode(response.body) as List;
+      return list.map((e) => Product.fromJson(Map<String, dynamic>.from(e as Map))).toList();
     } catch (e) {
       isOnline.value = false;
       final cached = await _loadCachedProducts();
@@ -386,15 +352,8 @@ class ElectroZenApiService {
     if (response.statusCode != 200) {
       throw Exception('Failed to load customers (${response.statusCode})');
     }
-    final dynamic decoded = jsonDecode(response.body);
-    if (decoded is! List) return [];
-    final customers = <Customer>[];
-    for (final e in decoded) {
-      if (e is Map) {
-        customers.add(Customer.fromJson(Map<String, dynamic>.from(e)));
-      }
-    }
-    return customers;
+    final list = jsonDecode(response.body) as List;
+    return list.map((e) => Customer.fromJson(Map<String, dynamic>.from(e as Map))).toList();
   }
 
   Future<Customer> createCustomer({
@@ -421,8 +380,7 @@ class ElectroZenApiService {
     if (response.statusCode != 200 && response.statusCode != 201) {
       throw Exception('Failed to create customer');
     }
-    final dynamic decoded = jsonDecode(response.body);
-    return Customer.fromJson(decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{});
+    return Customer.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
   }
 
   Future<Map<String, dynamic>> submitMobileSale({
@@ -465,8 +423,7 @@ class ElectroZenApiService {
       throw Exception(err['error'] ?? 'Failed to complete sale');
     }
     syncRevision.value += 1;
-    final dynamic decoded = jsonDecode(response.body);
-    return decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> fetchDashboard({String range = 'all'}) async {
@@ -480,129 +437,102 @@ class ElectroZenApiService {
             .timeout(const Duration(seconds: 4)),
       );
       if (response.statusCode == 200) {
-        final dynamic decoded = jsonDecode(response.body);
-        return decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
+        return jsonDecode(response.body) as Map<String, dynamic>;
       }
     } catch (_) {}
     return {};
   }
 
-  Future<List<Map<String, dynamic>>> fetchSales() async {
+  Future<Map<String, String>> fetchSettings() async {
     try {
       final response = await _authorizedRequest(
-        () => http
-            .get(
-              Uri.parse('$baseUrl/api/sales'),
-              headers: _headers,
-            )
-            .timeout(const Duration(seconds: 6)),
+        () => http.get(Uri.parse('$baseUrl/api/settings'), headers: _headers).timeout(const Duration(seconds: 4)),
       );
       if (response.statusCode == 200) {
-        final dynamic decoded = jsonDecode(response.body);
-        if (decoded is List) {
-          final list = <Map<String, dynamic>>[];
-          for (final e in decoded) {
-            if (e is Map) {
-              list.add(Map<String, dynamic>.from(e));
-            }
-          }
-          return list;
-        }
-      }
-    } catch (_) {}
-    return [];
-  }
-
-  Future<Map<String, String>> fetchStoreSettings() async {
-    try {
-      final response = await _authorizedRequest(
-        () => http
-            .get(
-              Uri.parse('$baseUrl/api/settings'),
-              headers: _headers,
-            )
-            .timeout(const Duration(seconds: 4)),
-      );
-      if (response.statusCode == 200) {
-        final dynamic decoded = jsonDecode(response.body);
-        final map = <String, String>{};
-        if (decoded is List) {
-          for (final item in decoded) {
-            if (item is Map && item['key'] != null) {
-              map[item['key'].toString()] = item['value']?.toString() ?? '';
-            }
-          }
-        }
-        return map;
+        final raw = jsonDecode(response.body) as Map<String, dynamic>;
+        return raw.map((k, v) => MapEntry(k, (v ?? '').toString()));
       }
     } catch (_) {}
     return {};
   }
 
-  Future<Map<String, dynamic>> scanProviderBill({String? imageBase64, String? rawText, String? mimeType}) async {
+  Future<List<SaleRecord>> fetchSales() async {
+    final response = await _authorizedRequest(
+      () => http.get(Uri.parse('$baseUrl/api/sales'), headers: _headers).timeout(const Duration(seconds: 6)),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Erreur chargement historique ventes (HTTP ${response.statusCode})');
+    }
+    final list = jsonDecode(response.body) as List;
+    return list.map((e) => SaleRecord.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+  }
+
+  Future<void> cancelSale(int saleId) async {
+    final response = await _authorizedRequest(
+      () => http.delete(Uri.parse('$baseUrl/api/sales/$saleId'), headers: _headers).timeout(const Duration(seconds: 6)),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Erreur annulation vente (HTTP ${response.statusCode})');
+    }
+    syncRevision.value += 1;
+  }
+
+  Future<Map<String, dynamic>> scanSupplierInvoice({
+    String imageBase64 = '',
+    String mimeType = 'image/jpeg',
+    String rawText = '',
+  }) async {
     final response = await _authorizedRequest(
       () => http
           .post(
-            Uri.parse('$baseUrl/api/ai/scan-bill'),
+            Uri.parse('$baseUrl/api/ai/scan-invoice'),
             headers: _headers,
             body: jsonEncode({
               'imageBase64': imageBase64,
+              'mimeType': mimeType,
               'rawText': rawText,
-              'mimeType': mimeType ?? 'image/jpeg',
             }),
           )
-          .timeout(const Duration(seconds: 25)),
+          .timeout(const Duration(seconds: 32)),
     );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode != 200) {
-      final err = jsonDecode(response.body);
-      throw Exception(err['error'] ?? 'Échec de l\'analyse de la facture');
+      throw Exception(decoded['error'] ?? 'Erreur extraction facture (HTTP ${response.statusCode})');
     }
-    final dynamic decoded = jsonDecode(response.body);
-    return decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
+    return decoded;
   }
 
-  Future<List<Map<String, dynamic>>> fetchSuppliers() async {
-    try {
-      final response = await _authorizedRequest(
-        () => http
-            .get(
-              Uri.parse('$baseUrl/api/suppliers'),
-              headers: _headers,
-            )
-            .timeout(const Duration(seconds: 4)),
-      );
-      if (response.statusCode == 200) {
-        final dynamic decoded = jsonDecode(response.body);
-        if (decoded is List) {
-          final list = <Map<String, dynamic>>[];
-          for (final e in decoded) {
-            if (e is Map) {
-              list.add(Map<String, dynamic>.from(e));
-            }
-          }
-          return list;
-        }
-      }
-    } catch (_) {}
-    return [];
-  }
-
-  Future<Map<String, dynamic>> submitPurchase(Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> submitSupplierPurchase({
+    int? supplierId,
+    String providerName = '',
+    String providerPhone = '',
+    required String invoiceNumber,
+    required double paidAmount,
+    required List<Map<String, dynamic>> items,
+    String notes = '',
+  }) async {
     final response = await _authorizedRequest(
       () => http
           .post(
             Uri.parse('$baseUrl/api/purchases'),
             headers: _headers,
-            body: jsonEncode(payload),
+            body: jsonEncode({
+              'supplier_id': supplierId ?? 0,
+              'provider_name': providerName,
+              'provider_phone': providerPhone,
+              'invoice_number': invoiceNumber,
+              'paid_amount': paidAmount,
+              'items': items,
+              'notes': notes,
+            }),
           )
           .timeout(const Duration(seconds: 8)),
     );
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      final err = jsonDecode(response.body);
-      throw Exception(err['error'] ?? 'Échec de l\'enregistrement de l\'achat');
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(decoded['error'] ?? 'Erreur enregistrement réception');
     }
     syncRevision.value += 1;
-    final dynamic decoded = jsonDecode(response.body);
-    return decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
+    return decoded;
   }
 }

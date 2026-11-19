@@ -23,6 +23,7 @@ const I18N = {
   fr: {
     dashboard: 'Vue d’ensemble',
     pos: 'Caisse & Facturation',
+    sales: 'Historique Ventes',
     products: 'Catalogue & Tarifs',
     quotations: 'Devis & SAV Atelier',
     purchases: 'Achats & Réceptions',
@@ -44,6 +45,7 @@ const I18N = {
   ar: {
     dashboard: 'لوحة القيادة',
     pos: 'نقطة البيع والفوترة',
+    sales: 'سجل المبيعات',
     products: 'المنتجات والأسعار',
     quotations: 'عروض الأسعار والصيانة',
     purchases: 'المشتريات والتموين',
@@ -65,6 +67,7 @@ const I18N = {
   en: {
     dashboard: 'Overview',
     pos: 'Point of Sale',
+    sales: 'Sales History',
     products: 'Catalog & Pricing',
     quotations: 'Quotations & Repair',
     purchases: 'Purchase Orders',
@@ -129,9 +132,17 @@ const state = {
   posInstallmentsCount: 3,
   quickCustomerModalOpen: false,
   purchaseSupplierId: 1,
+  purchaseNewProviderName: '',
+  purchaseNewProviderPhone: '',
   purchaseInvoiceRef: '',
   purchasePaidAmount: '',
   purchaseItems: [],
+  invoiceScanLoading: false,
+  invoiceScanText: '',
+  invoiceScanMessage: '',
+  salesSearch: '',
+  salesStatusFilter: 'all',
+  salesPayFilter: 'all',
   customerLedger: null,
   freePaymentAmount: '',
   inspectorOpen: false,
@@ -448,6 +459,7 @@ function render() {
   const navItems = [
     { id: 'dashboard', label: t.dashboard, icon: ICONS.dashboard, count: '' },
     { id: 'pos', label: t.pos, icon: ICONS.pos, count: state.posCart.length || '' },
+    { id: 'sales', label: t.sales, icon: ICONS.history, count: state.sales.length || '' },
     { id: 'products', label: t.products, icon: ICONS.products, count: state.products.length },
     { id: 'quotations', label: t.quotations, icon: ICONS.quotations, count: (state.dashboard?.openQuotationsCount || 0) + (state.dashboard?.serviceStats?.openJobs || 0) || '' },
     { id: 'purchases', label: t.purchases, icon: ICONS.purchases, count: state.purchases.length || '' },
@@ -1230,6 +1242,131 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
     `;
   }
 
+  // 2B. HISTORIQUE DES VENTES (SALES HISTORY)
+  if (state.activeTab === 'sales') {
+    const q = (state.salesSearch || '').toLowerCase().trim();
+    const filteredSales = state.sales.filter((s) => {
+      if (state.salesStatusFilter === 'completed' && s.status === 'canceled') return false;
+      if (state.salesStatusFilter === 'canceled' && s.status !== 'canceled') return false;
+      if (state.salesPayFilter !== 'all' && s.payment_method !== state.salesPayFilter) return false;
+      if (!q) return true;
+      const itemsText = (s.items || []).map((i) => `${i.product_name || ''} ${i.serial_number || ''} ${i.barcode || ''}`).join(' ').toLowerCase();
+      return (
+        String(s.invoice_number || '').toLowerCase().includes(q) ||
+        String(s.customer_name || '').toLowerCase().includes(q) ||
+        String(s.source_device || '').toLowerCase().includes(q) ||
+        itemsText.includes(q)
+      );
+    });
+    const activeSales = filteredSales.filter((s) => s.status !== 'canceled');
+    const sumTotal = activeSales.reduce((a, b) => a + Number(b.total_amount || 0), 0);
+    const sumPaid = activeSales.reduce((a, b) => a + Number(b.paid_amount || 0), 0);
+    const sumDebt = activeSales.reduce((a, b) => a + Number(b.remaining_debt || 0), 0);
+
+    return `
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Tickets Affichés</div>
+            <div class="kpi-val">${filteredSales.length}</div>
+            <div class="kpi-sub">${activeSales.length} validée(s)</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Chiffre d'Affaires TTC</div>
+            <div class="kpi-val num" style="color:#1c61e7">${fmtMoney(sumTotal)}</div>
+            <div class="kpi-sub">Hors factures annulées</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Montant Encaissé</div>
+            <div class="kpi-val num" style="color:#267d39">${fmtMoney(sumPaid)}</div>
+            <div class="kpi-sub">Espèces / Carte / Acomptes</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Créances Clients</div>
+            <div class="kpi-val num" style="color:#d97706">${fmtMoney(sumDebt)}</div>
+            <div class="kpi-sub">Reste à recouvrer</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header" style="flex-wrap:wrap;gap:10px">
+            <span class="panel-title">Historique Complet des Ventes & Garanties (${filteredSales.length})</span>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <input id="input-sales-search" class="input" style="width:260px" placeholder="N° Facture, Client, Produit, S/N..." value="${state.salesSearch}" />
+              <select id="select-sales-status" class="input" style="width:145px">
+                <option value="all" ${state.salesStatusFilter === 'all' ? 'selected' : ''}>Tous Statuts</option>
+                <option value="completed" ${state.salesStatusFilter === 'completed' ? 'selected' : ''}>Validées</option>
+                <option value="canceled" ${state.salesStatusFilter === 'canceled' ? 'selected' : ''}>Annulées (Avoir)</option>
+              </select>
+              <select id="select-sales-pay" class="input" style="width:140px">
+                <option value="all" ${state.salesPayFilter === 'all' ? 'selected' : ''}>Tous Modes</option>
+                <option value="cash" ${state.salesPayFilter === 'cash' ? 'selected' : ''}>Espèces</option>
+                <option value="card" ${state.salesPayFilter === 'card' ? 'selected' : ''}>Carte / Virement</option>
+                <option value="credit" ${state.salesPayFilter === 'credit' ? 'selected' : ''}>Crédit / Facilité</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>N° Facture</th>
+                  <th>Date & Heure</th>
+                  <th>Client</th>
+                  <th>Articles & N° Série</th>
+                  <th>Mode</th>
+                  <th style="text-align:end">Total TTC</th>
+                  <th style="text-align:end">Payé</th>
+                  <th style="text-align:end">Reste Dû</th>
+                  <th>Terminal</th>
+                  <th style="text-align:end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${
+                  filteredSales.length === 0
+                    ? `<tr><td colspan="10" style="text-align:center;padding:28px;color:#71717a">Aucune vente correspondante trouvée.</td></tr>`
+                    : filteredSales
+                        .map((s) => {
+                          const payLabel = s.payment_method === 'credit' ? 'Crédit' : s.payment_method === 'card' ? 'Carte' : 'Espèces';
+                          const itemsList = (s.items || [])
+                            .map((i) => `<div style="font-size:11px;line-height:1.35">• <strong>${i.quantity}x</strong> ${i.product_name}${i.serial_number ? ` <span class="mono" style="color:#6d28d9">(S/N: ${i.serial_number})</span>` : ''}</div>`)
+                            .join('');
+                          return `
+                            <tr>
+                              <td class="mono" style="font-weight:700">
+                                <div>${s.invoice_number}</div>
+                                ${s.status === 'canceled' ? `<span class="tag tag-danger" style="font-size:9.5px">ANNULÉE • ${s.credit_note_number || 'AVOIR'}</span>` : ''}
+                              </td>
+                              <td class="mono" style="font-size:11.5px;color:#52525b">${(s.created_at || '').slice(0, 16)}</td>
+                              <td style="font-weight:600">${s.customer_name || 'Client Comptoir'}</td>
+                              <td style="max-width:260px">${itemsList || '—'}</td>
+                              <td><span class="tag">${payLabel} • ${s.price_tier === 'wholesale' ? 'Gros' : 'Détail'}</span></td>
+                              <td class="num" style="text-align:end;font-weight:700">${fmtMoney(s.total_amount)}</td>
+                              <td class="num" style="text-align:end;color:#267d39;font-weight:600">${fmtMoney(s.paid_amount)}</td>
+                              <td class="num" style="text-align:end">
+                                ${s.remaining_debt > 0 && s.status !== 'canceled' ? `<span class="tag tag-warn num">${fmtMoney(s.remaining_debt)}</span>` : '<span style="color:#a1a1aa">—</span>'}
+                              </td>
+                              <td style="font-size:11px;color:#71717a">${s.source_device || 'windows_pos'}</td>
+                              <td style="text-align:end">
+                                <div class="action-group">
+                                  <button class="btn btn-sm btn-print-sale" data-sale-id="${s.id}">${ICONS.print}<span>Facture / Garantie</span></button>
+                                  ${isAdmin && s.status !== 'canceled' ? `<button class="btn btn-sm btn-icon btn-cancel-sale" data-sale-id="${s.id}" title="Émettre un Avoir (AV) et réintégrer le stock" style="color:#e21b1b">${ICONS.trash}</button>` : ''}
+                                </div>
+                              </td>
+                            </tr>
+                          `;
+                        })
+                        .join('')
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   // 3. PRODUCTS & PRICE HISTORY CATALOG
   if (state.activeTab === 'products') {
     return `
@@ -1278,6 +1415,28 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
     const purTotal = state.purchaseItems.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
     return `
       <div style="display:flex;flex-direction:column;gap:16px">
+        <!-- AI PROVIDER INVOICE SCANNER -->
+        <div class="panel" style="border-color:#c4b5fd;background:linear-gradient(135deg,#faf5ff 0%,#ffffff 100%)">
+          <div class="panel-header">
+            <span class="panel-title" style="color:#5b21b6">Scanner une Facture Fournisseur (Extraction IA Automatique)</span>
+            <span class="tag" style="background:#ede9fe;color:#5b21b6;border-color:#c4b5fd">Fournisseur • Produits • Prix • Qtés</span>
+          </div>
+          <div class="panel-body" style="display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+              <label class="btn btn-dark" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+                <input type="file" id="input-scan-invoice-file" accept="image/*" style="display:none" />
+                <span>${state.invoiceScanLoading ? 'Analyse IA en cours...' : 'Importer Photo / Scan Facture'}</span>
+              </label>
+              <span style="font-size:12px;color:#52525b">ou collez le texte brut de la facture ci-dessous (compatible DeepSeek / Gemini / OpenAI) :</span>
+            </div>
+            <div style="display:flex;gap:8px;align-items:flex-start">
+              <textarea id="textarea-scan-invoice-text" class="input" rows="2" style="flex:1;font-size:12px" placeholder="Ex: Facture N° BL-882 Fournisseur ElectroMaroc: 5x TV Samsung 55Q60C à 4800 MAD, 3x Climatiseur Siera 12000 BTU à 2600 MAD...">${state.invoiceScanText || ''}</textarea>
+              <button type="button" class="btn btn-primary" id="btn-scan-invoice-text" ${state.invoiceScanLoading ? 'disabled' : ''}>Extraire Texte (IA)</button>
+            </div>
+            ${state.invoiceScanMessage ? `<div style="font-size:12px;font-weight:600;color:#5b21b6;padding:6px 10px;background:#f3e8ff;border-radius:6px">${state.invoiceScanMessage}</div>` : ''}
+          </div>
+        </div>
+
         <div class="split-pos">
           <div class="panel">
             <div class="panel-header">
@@ -1288,7 +1447,8 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                 <div>
                   <label class="field-label">Fournisseur</label>
                   <select id="select-pur-supplier" class="input">
-                    ${state.suppliers.map((s) => `<option value="${s.id}">${s.company} (${s.name})</option>`).join('')}
+                    ${state.purchaseNewProviderName ? `<option value="0" selected>+ Nouveau : ${state.purchaseNewProviderName}</option>` : ''}
+                    ${state.suppliers.map((s) => `<option value="${s.id}" ${!state.purchaseNewProviderName && Number(state.purchaseSupplierId) === Number(s.id) ? 'selected' : ''}>${s.company} (${s.name})</option>`).join('')}
                   </select>
                 </div>
                 <div>
@@ -1323,8 +1483,11 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                           const prod = state.products.find((p) => p.id === item.product_id);
                           return `
                             <div style="padding:12px;border:1px solid #e4e4e7;border-radius:5px;background:#fafafa">
-                              <div style="display:flex;justify-content:space-between;font-weight:600;color:#09090b;margin-bottom:8px">
-                                <span>${getProdName(prod)} <span style="color:#71717a;font-weight:400">(Coût précédent : ${fmtMoney(prod?.current_cost_price)})</span></span>
+                              <div style="display:flex;justify-content:space-between;font-weight:600;color:#09090b;margin-bottom:8px;gap:8px;align-items:center">
+                                <span>
+                                  ${prod ? getProdName(prod) : `${item.product_name || 'Nouvel Article'} <span class="tag" style="background:#dbeafe;color:#1e40af;font-size:10px">Nouveau Produit</span>`}
+                                  <span style="color:#71717a;font-weight:400">${prod ? `(Coût précédent : ${fmtMoney(prod.current_cost_price)})` : '(Sera créé dans le catalogue)'}</span>
+                                </span>
                                 <button type="button" class="btn-remove-pur-item" data-idx="${idx}" style="border:none;background:none;color:#b91c1c;cursor:pointer">Retirer</button>
                               </div>
                               <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
@@ -3633,10 +3796,121 @@ function attachEvents() {
     };
   }
 
+  // Sales History filters
+  const inpSalesSearch = document.getElementById('input-sales-search');
+  if (inpSalesSearch) {
+    inpSalesSearch.oninput = (e) => {
+      state.salesSearch = e.target.value;
+      render();
+      const el = document.getElementById('input-sales-search');
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    };
+  }
+  const selSalesStatus = document.getElementById('select-sales-status');
+  if (selSalesStatus) {
+    selSalesStatus.onchange = (e) => {
+      state.salesStatusFilter = e.target.value;
+      render();
+    };
+  }
+  const selSalesPay = document.getElementById('select-sales-pay');
+  if (selSalesPay) {
+    selSalesPay.onchange = (e) => {
+      state.salesPayFilter = e.target.value;
+      render();
+    };
+  }
+
+  // AI Provider Invoice Scanner handlers
+  async function runInvoiceAiScan({ imageBase64 = '', mimeType = 'image/jpeg', rawText = '' }) {
+    state.invoiceScanLoading = true;
+    state.invoiceScanMessage = 'Analyse de la facture par IA en cours...';
+    render();
+    try {
+      const res = await fetch('/api/ai/scan-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64, mimeType, rawText }),
+      });
+      const data = await res.json();
+      state.invoiceScanLoading = false;
+      if (!res.ok || !data.success) {
+        state.invoiceScanMessage = `Erreur : ${data.error || 'Échec extraction'}`;
+        render();
+        return;
+      }
+      if (data.matched_supplier_id) {
+        state.purchaseSupplierId = data.matched_supplier_id;
+        state.purchaseNewProviderName = '';
+        state.purchaseNewProviderPhone = '';
+      } else if (data.provider_name) {
+        state.purchaseSupplierId = 0;
+        state.purchaseNewProviderName = data.provider_name;
+        state.purchaseNewProviderPhone = data.provider_phone || '';
+      }
+      state.purchaseInvoiceRef = data.invoice_number || '';
+      state.purchaseItems = (data.items || []).map((it) => ({
+        product_id: it.matched_product_id || null,
+        product_name: it.product_name,
+        sku_or_ref: it.sku_or_ref || '',
+        brand: it.brand || '',
+        quantity: Number(it.quantity) || 1,
+        unit_cost: Number(it.unit_cost) || 0,
+        new_wholesale_price: Math.round((Number(it.unit_cost) || 0) * 1.12),
+        new_retail_price: Number(it.suggested_retail_price) || Math.round((Number(it.unit_cost) || 0) * 1.25),
+      }));
+      state.invoiceScanMessage = `Facture analysée (${data.source.toUpperCase()}) : ${state.purchaseItems.length} article(s) détecté(s) pour ${data.provider_name || 'Fournisseur'}.`;
+      render();
+    } catch (err) {
+      state.invoiceScanLoading = false;
+      state.invoiceScanMessage = `Erreur réseau : ${err.message}`;
+      render();
+    }
+  }
+
+  const inpScanInvoiceFile = document.getElementById('input-scan-invoice-file');
+  if (inpScanInvoiceFile) {
+    inpScanInvoiceFile.onchange = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        runInvoiceAiScan({
+          imageBase64: String(reader.result || ''),
+          mimeType: file.type || 'image/jpeg',
+          rawText: document.getElementById('textarea-scan-invoice-text')?.value || '',
+        });
+      };
+      reader.readAsDataURL(file);
+    };
+  }
+
+  const txtScanInvoice = document.getElementById('textarea-scan-invoice-text');
+  if (txtScanInvoice) {
+    txtScanInvoice.oninput = (e) => {
+      state.invoiceScanText = e.target.value;
+    };
+  }
+
+  const btnScanInvoiceText = document.getElementById('btn-scan-invoice-text');
+  if (btnScanInvoiceText) {
+    btnScanInvoiceText.onclick = () => {
+      const rawText = document.getElementById('textarea-scan-invoice-text')?.value || '';
+      if (!rawText.trim()) {
+        showToast('Veuillez importer une photo ou coller le texte de la facture.');
+        return;
+      }
+      runInvoiceAiScan({ rawText });
+    };
+  }
+
   const btnSubmitPurchase = document.getElementById('btn-submit-purchase');
   if (btnSubmitPurchase) {
     btnSubmitPurchase.onclick = async () => {
-      const supId = Number(document.getElementById('select-pur-supplier')?.value || 1);
+      const supId = Number(document.getElementById('select-pur-supplier')?.value || 0);
       const ref = document.getElementById('input-pur-ref')?.value || '';
       const paid = document.getElementById('input-pur-paid')?.value ?? '';
       const res = await fetch('/api/purchases', {
@@ -3644,6 +3918,8 @@ function attachEvents() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           supplier_id: supId,
+          provider_name: supId === 0 ? state.purchaseNewProviderName : '',
+          provider_phone: supId === 0 ? state.purchaseNewProviderPhone : '',
           invoice_number: ref,
           paid_amount: paid,
           items: state.purchaseItems,
@@ -3652,8 +3928,12 @@ function attachEvents() {
       if (res.ok) {
         state.purchaseItems = [];
         state.purchasePaidAmount = '';
+        state.purchaseNewProviderName = '';
+        state.purchaseNewProviderPhone = '';
+        state.invoiceScanMessage = '';
+        state.invoiceScanText = '';
         await loadAllData();
-        showToast('Réception enregistrée et historique des prix mis à jour');
+        showToast('Réception enregistrée, produits et historique des prix mis à jour');
       }
     };
   }

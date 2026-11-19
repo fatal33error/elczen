@@ -7,7 +7,7 @@ import 'screens/catalog_form_screen.dart';
 import 'screens/mobile_pos_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/sales_history_screen.dart';
-import 'screens/provider_bill_screen.dart';
+import 'screens/invoice_scanner_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -103,65 +103,19 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
     );
   }
 
-  void _openSalesHistoryModal(BuildContext context) {
+  void _openSalesHistory(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (ctx) => SalesHistoryScreen(api: widget.api),
+        builder: (_) => SalesHistoryScreen(api: widget.api),
       ),
     );
   }
 
-  void _openProviderBillModal(BuildContext context) {
+  void _openInvoiceScanner(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (ctx) => ProviderBillScreen(api: widget.api),
+        builder: (_) => InvoiceScannerScreen(api: widget.api),
       ),
-    );
-  }
-
-  void _openTopMenu(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.wifi_tethering, color: Color(0xFF1C61E7)),
-                  title: const Text('Wi-Fi Sync & Connexion Serveur', style: TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: Text('IP: ${widget.api.host}:${widget.api.port}'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _openPairingModal(context);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.document_scanner_outlined, color: Color(0xFF10B981)),
-                  title: const Text('Scanner Facture Fournisseur (Arrivage)', style: TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: const Text('Extraction automatique par IA des prix, articles et quantités'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _openProviderBillModal(context);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.receipt_long_outlined, color: Color(0xFF6D28D9)),
-                  title: const Text('Historique des Ventes & Factures', style: TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: const Text('Consultation et réimpression tickets 80mm et factures A4'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _openSalesHistoryModal(context);
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -281,8 +235,8 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
                       )
                     : IconButton(
                         icon: const Icon(Icons.more_vert),
-                        tooltip: 'Menu Principal & Wi-Fi',
-                        onPressed: () => _openTopMenu(homeContext),
+                        tooltip: 'Wi-Fi Sync & Connexion Serveur',
+                        onPressed: () => _openPairingModal(homeContext),
                       ),
                 title: Row(
                   children: [
@@ -385,8 +339,8 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
                     onOpenPos: () => setState(() => _selectedIndex = 2),
                     onOpenCatalog: () => setState(() => _selectedIndex = 1),
                     onOpenPairing: () => _openPairingModal(homeContext),
-                    onOpenSalesHistory: () => _openSalesHistoryModal(homeContext),
-                    onOpenProviderBill: () => _openProviderBillModal(homeContext),
+                    onOpenSalesHistory: () => _openSalesHistory(homeContext),
+                    onOpenInvoiceScanner: () => _openInvoiceScanner(homeContext),
                   ),
                   CatalogFormScreen(
                     key: _catalogKey,
@@ -400,7 +354,7 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
                     api: widget.api,
                     cart: _cart,
                     onCartUpdated: () => setState(() {}),
-                    onOpenSalesHistory: () => _openSalesHistoryModal(homeContext),
+                    onOpenSalesHistory: () => _openSalesHistory(homeContext),
                   ),
                 ],
               ),

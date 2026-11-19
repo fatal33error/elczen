@@ -207,3 +207,107 @@ class MobileCartItem {
 
   double get subtotal => unitPrice * quantity;
 }
+
+class SaleItemRecord {
+  final int id;
+  final int productId;
+  final String productName;
+  final String barcode;
+  final String serialNumber;
+  final int quantity;
+  final double unitPrice;
+  final double subtotal;
+  final int warrantyMonths;
+  final String warrantyExpiresAt;
+
+  SaleItemRecord({
+    required this.id,
+    required this.productId,
+    required this.productName,
+    required this.barcode,
+    required this.serialNumber,
+    required this.quantity,
+    required this.unitPrice,
+    required this.subtotal,
+    required this.warrantyMonths,
+    required this.warrantyExpiresAt,
+  });
+
+  factory SaleItemRecord.fromJson(Map<String, dynamic> json) {
+    return SaleItemRecord(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      productId: (json['product_id'] as num?)?.toInt() ?? 0,
+      productName: (json['product_name'] ?? '').toString(),
+      barcode: (json['barcode'] ?? '').toString(),
+      serialNumber: (json['serial_number'] ?? '').toString(),
+      quantity: (json['quantity'] as num?)?.toInt() ?? 1,
+      unitPrice: (json['unit_price'] as num?)?.toDouble() ?? 0.0,
+      subtotal: (json['subtotal'] as num?)?.toDouble() ?? 0.0,
+      warrantyMonths: (json['warranty_months'] as num?)?.toInt() ?? 12,
+      warrantyExpiresAt: (json['warranty_expires_at'] ?? '').toString(),
+    );
+  }
+}
+
+class SaleRecord {
+  final int id;
+  final String invoiceNumber;
+  final int? customerId;
+  final String customerName;
+  final String priceTier;
+  final double subtotal;
+  final double discount;
+  final double totalAmount;
+  final double paidAmount;
+  final double remainingDebt;
+  final String paymentMethod;
+  final String sourceDevice;
+  final String status;
+  final String creditNoteNumber;
+  final String createdAt;
+  final List<SaleItemRecord> items;
+
+  SaleRecord({
+    required this.id,
+    required this.invoiceNumber,
+    this.customerId,
+    required this.customerName,
+    required this.priceTier,
+    required this.subtotal,
+    required this.discount,
+    required this.totalAmount,
+    required this.paidAmount,
+    required this.remainingDebt,
+    required this.paymentMethod,
+    required this.sourceDevice,
+    required this.status,
+    required this.creditNoteNumber,
+    required this.createdAt,
+    required this.items,
+  });
+
+  factory SaleRecord.fromJson(Map<String, dynamic> json) {
+    final rawItems = (json['items'] as List?) ?? [];
+    return SaleRecord(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      invoiceNumber: (json['invoice_number'] ?? '').toString(),
+      customerId: (json['customer_id'] as num?)?.toInt(),
+      customerName: (json['customer_name'] ?? 'Client Comptoir').toString(),
+      priceTier: (json['price_tier'] ?? 'retail').toString(),
+      subtotal: (json['subtotal'] as num?)?.toDouble() ?? 0.0,
+      discount: (json['discount'] as num?)?.toDouble() ?? 0.0,
+      totalAmount: (json['total_amount'] as num?)?.toDouble() ?? 0.0,
+      paidAmount: (json['paid_amount'] as num?)?.toDouble() ?? 0.0,
+      remainingDebt: (json['remaining_debt'] as num?)?.toDouble() ?? 0.0,
+      paymentMethod: (json['payment_method'] ?? 'cash').toString(),
+      sourceDevice: (json['source_device'] ?? 'windows_pos').toString(),
+      status: (json['status'] ?? 'completed').toString(),
+      creditNoteNumber: (json['credit_note_number'] ?? '').toString(),
+      createdAt: (json['created_at'] ?? '').toString(),
+      items: rawItems
+          .whereType<Map>()
+          .map((e) => SaleItemRecord.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+    );
+  }
+}

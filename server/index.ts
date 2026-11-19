@@ -162,106 +162,108 @@ async function callAiProductEnrichment(
   }
 }
 
-function parseBillFallback(raw: string): Record<string, any> {
-  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const items: Array<Record<string, any>> = [];
-  let providerName = 'Fournisseur Réception';
-  let invoiceNumber = `BL-${Date.now().toString().slice(-6)}`;
-  let invoiceDate = new Date().toISOString().slice(0, 10);
-  let totalAmount = 0;
-
-  for (const line of lines) {
-    if (/fournisseur|soci[eé]t[eé]|distribut/i.test(line)) {
-      providerName = line.replace(/.*[:\-]/, '').trim() || providerName;
-    }
-    if (/facture|bl|bon|n[°o]/i.test(line) && /\d+/.test(line)) {
-      const match = line.match(/(?:facture|bl|bon|ref|n[°o])\s*[:#\s]?\s*([A-Za-z0-9\-_]+)/i);
-      if (match) invoiceNumber = match[1];
-    }
-    if (/\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}/.test(line)) {
-      const dMatch = line.match(/\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}/);
-      if (dMatch) invoiceDate = dMatch[0];
-    }
-    const priceMatch = line.match(/(\d+(?:[.,]\d{1,2})?)\s*(?:mad|dh|dhs)?$/i);
-    const qtyMatch = line.match(/\b(\d+)\s*(?:x|u|pcs|unites)?\b/i);
-    if (priceMatch && line.length > 8 && !/total|sous-total|net|tva/i.test(line)) {
-      const price = parseFloat(priceMatch[1].replace(',', '.'));
-      const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
-      const cleanName = line.replace(priceMatch[0], '').replace(qtyMatch ? qtyMatch[0] : '', '').trim();
-      if (cleanName.length > 2 && price > 0) {
-        items.push({
-          product_name: cleanName,
-          quantity: qty,
-          unit_cost: Math.round((price / qty) * 100) / 100,
-          total_price: price,
-        });
-      }
-    }
-    if (/total|net\s*a\s*payer/i.test(line)) {
-      const tMatch = line.match(/(\d+(?:[.,]\d{1,2})?)/);
-      if (tMatch) totalAmount = parseFloat(tMatch[1].replace(',', '.'));
-    }
-  }
-
-  return {
-    provider_name: providerName,
-    invoice_number: invoiceNumber,
-    invoice_date: invoiceDate,
-    total_amount: totalAmount || items.reduce((acc, it) => acc + (it.total_price || 0), 0),
-    items: items.length > 0 ? items : [
-      {
-        product_name: 'Réception Matériel Électroménager',
-        quantity: 1,
-        unit_cost: 1500,
-        total_price: 1500,
-      },
-    ],
-  };
-}
-
-async function parseProviderBillWithAi(
+async function callAiInvoiceExtraction(
   providerRaw: string,
   apiKey: string,
-  imageBase64?: string,
-  rawText?: string,
-  mimeType: string = 'image/jpeg'
+  imageBase64: string,
+  mimeType: string,
+  rawText: string
 ): Promise<{ data: Record<string, any> | null; provider: string; error?: string }> {
   const provider = (providerRaw || 'gemini').toLowerCase();
   const key = String(apiKey || '').trim();
-  if (!key) {
-    return { data: parseBillFallback(rawText || ''), provider: 'offline_heuristic' };
-  }
+  if (!key) return { data: null, provider: 'none', error: 'Aucune clé API IA configurée dans Paramètres.' };
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 22000);
-    let contentText = '';
-
-    const billPrompt = `Tu es un expert comptable et gestionnaire de stock pour magasins d'électroménager et high-tech au Maroc. Analyse cette facture ou ce bon de livraison fournisseur (en français ou en arabe).
-Extrais les informations de la facture sous la forme d'un objet JSON strict valide sans texte superflu:
+  const invoicePrompt = `You are an expert invoice OCR & structured extraction assistant for an electronics & home appliances store in Morocco (currency: MAD).
+Extract all information from this supplier/provider invoice and return ONLY strict valid JSON with this exact schema:
 {
-  "provider_name": "Nom de la société fournisseur ou marque émettrice",
-  "invoice_number": "Numéro de la facture ou référence BL (ex: FAC-2026-9812, BL-4029)",
-  "invoice_date": "Date de facturation (YYYY-MM-DD)",
-  "total_amount": 0.0,
-  "paid_amount": 0.0,
-  "notes": "Remarques éventuelles",
+  "provider_name": "string (supplier / company name)",
+  "provider_phone": "string (phone if found, else empty)",
+  "invoice_number": "string (BL or invoice number if found)",
+  "invoice_date": "string (YYYY-MM-DD if found)",
+  "total_amount": 0,
   "items": [
     {
-      "product_name": "Désignation complète du produit",
-      "brand": "Marque si identifiable (Samsung, LG, Bosch, etc.)",
-      "model_number": "Numéro de modèle ou référence",
+      "product_name": "string (clean product designation)",
+      "sku_or_ref": "string (model number / SKU / barcode if visible)",
+      "brand": "string (brand name if visible)",
       "quantity": 1,
-      "unit_cost": 0.0,
-      "total_price": 0.0,
-      "barcode": "Code-barres EAN si présent sur la ligne"
+      "unit_cost": 0,
+      "suggested_retail_price": 0
     }
   ]
 }
-Assure-toi que les montants sont des nombres décimaux en Dirhams marocains (MAD).`;
+Rules:
+- unit_cost is the unit buying price (HT or TTC per unit). If only line total is shown, divide by quantity.
+- If suggested_retail_price is not on the invoice, estimate a realistic Moroccan retail price (~20% markup over unit_cost) or set 0.
+- Return ONLY JSON, no markdown fences.`;
 
-    if (imageBase64 && provider === 'gemini') {
-      const cleanB64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '').trim();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 28000);
+    let contentText = '';
+    const cleanB64 = String(imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+
+    if (provider === 'deepseek') {
+      if (!rawText.trim()) {
+        clearTimeout(timer);
+        return {
+          data: null,
+          provider: 'deepseek',
+          error: 'DeepSeek ne supporte pas la lecture directe de photos (Vision). Sélectionnez Gemini ou OpenAI dans Paramètres IA, ou collez le texte de la facture.',
+        };
+      }
+      const resp = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: invoicePrompt },
+            { role: 'user', content: `Extract from this invoice text:\n\n${rawText}` },
+          ],
+        }),
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        return { data: null, provider: 'deepseek', error: `DEEPSEEK HTTP ${resp.status}: ${errBody.slice(0, 140)}` };
+      }
+      const json = (await resp.json()) as any;
+      contentText = json?.choices?.[0]?.message?.content || '';
+    } else if (provider === 'openai') {
+      const userContent: any[] = [{ type: 'text', text: rawText ? `${invoicePrompt}\n\nText:\n${rawText}` : invoicePrompt }];
+      if (cleanB64) {
+        userContent.push({
+          type: 'image_url',
+          image_url: { url: `data:${mimeType || 'image/jpeg'};base64,${cleanB64}` },
+        });
+      }
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+          messages: [{ role: 'user', content: userContent }],
+        }),
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        return { data: null, provider: 'openai', error: `OPENAI HTTP ${resp.status}: ${errBody.slice(0, 140)}` };
+      }
+      const json = (await resp.json()) as any;
+      contentText = json?.choices?.[0]?.message?.content || '';
+    } else {
+      const parts: any[] = [{ text: rawText ? `${invoicePrompt}\n\nTexte:\n${rawText}` : invoicePrompt }];
+      if (cleanB64) {
+        parts.push({ inline_data: { mime_type: mimeType || 'image/jpeg', data: cleanB64 } });
+      }
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
         {
@@ -269,19 +271,7 @@ Assure-toi que les montants sont des nombres décimaux en Dirhams marocains (MAD
           signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: mimeType || 'image/jpeg',
-                      data: cleanB64,
-                    },
-                  },
-                  { text: billPrompt },
-                ],
-              },
-            ],
+            contents: [{ parts }],
             generationConfig: { responseMimeType: 'application/json', temperature: 0.1 },
           }),
         }
@@ -289,101 +279,17 @@ Assure-toi que les montants sont des nombres décimaux en Dirhams marocains (MAD
       clearTimeout(timer);
       if (!resp.ok) {
         const errBody = await resp.text().catch(() => '');
-        return { data: parseBillFallback(rawText || ''), provider: 'gemini', error: `Gemini HTTP ${resp.status}: ${errBody.slice(0, 100)}` };
+        return { data: null, provider: 'gemini', error: `GEMINI HTTP ${resp.status}: ${errBody.slice(0, 140)}` };
       }
       const json = (await resp.json()) as any;
       contentText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    } else if (imageBase64 && provider === 'openai') {
-      const fullDataUri = imageBase64.startsWith('data:') ? imageBase64 : `data:${mimeType || 'image/jpeg'};base64,${imageBase64}`;
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${key}`,
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          temperature: 0.1,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: billPrompt },
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: 'Analyse cette image de facture fournisseur:' },
-                { type: 'image_url', image_url: { url: fullDataUri } },
-              ],
-            },
-          ],
-        }),
-      });
-      clearTimeout(timer);
-      if (!resp.ok) {
-        const errBody = await resp.text().catch(() => '');
-        return { data: parseBillFallback(rawText || ''), provider: 'openai', error: `OpenAI HTTP ${resp.status}: ${errBody.slice(0, 100)}` };
-      }
-      const json = (await resp.json()) as any;
-      contentText = json?.choices?.[0]?.message?.content || '';
-    } else {
-      const textToAnalyze = rawText || 'Facture fournisseur électroménager';
-      if (provider === 'deepseek' || provider === 'openai') {
-        const endpoint =
-          provider === 'deepseek'
-            ? 'https://api.deepseek.com/chat/completions'
-            : 'https://api.openai.com/v1/chat/completions';
-        const model = provider === 'deepseek' ? 'deepseek-chat' : 'gpt-4o-mini';
-        const resp = await fetch(endpoint, {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${key}`,
-          },
-          body: JSON.stringify({
-            model,
-            temperature: 0.1,
-            response_format: { type: 'json_object' },
-            messages: [
-              { role: 'system', content: billPrompt },
-              { role: 'user', content: textToAnalyze },
-            ],
-          }),
-        });
-        clearTimeout(timer);
-        if (!resp.ok) {
-          const errBody = await resp.text().catch(() => '');
-          return { data: parseBillFallback(textToAnalyze), provider, error: `${provider.toUpperCase()} HTTP ${resp.status}: ${errBody.slice(0, 100)}` };
-        }
-        const json = (await resp.json()) as any;
-        contentText = json?.choices?.[0]?.message?.content || '';
-      } else {
-        const resp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
-          {
-            method: 'POST',
-            signal: controller.signal,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: `${billPrompt}\n\nTexte de la facture:\n${textToAnalyze}` }] }],
-              generationConfig: { responseMimeType: 'application/json', temperature: 0.1 },
-            }),
-          }
-        );
-        clearTimeout(timer);
-        if (!resp.ok) {
-          return { data: parseBillFallback(textToAnalyze), provider: 'gemini' };
-        }
-        const json = (await resp.json()) as any;
-        contentText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      }
     }
 
     const parsed = parseJsonFromAiText(contentText);
-    if (!parsed) return { data: parseBillFallback(rawText || ''), provider };
+    if (!parsed) return { data: null, provider, error: 'Réponse JSON invalide de l\'IA lors de l\'analyse de facture.' };
     return { data: parsed, provider };
   } catch (err: any) {
-    return { data: parseBillFallback(rawText || ''), provider: 'offline_heuristic', error: err?.message };
+    return { data: null, provider, error: err?.message || 'Erreur réseau IA' };
   }
 }
 
@@ -1564,30 +1470,39 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/purchases' && method === 'POST') {
-      const { supplier_id, supplier_name, invoice_number, items, paid_amount, notes } = await readJsonBody(req);
+      const { supplier_id, provider_name, provider_phone, invoice_number, items, paid_amount, notes } = await readJsonBody(req);
       if (!Array.isArray(items) || items.length === 0) {
         sendJson(res, 400, { error: 'Purchase must include at least one item' });
         return;
       }
 
-      let finalSuppId = Number(supplier_id) || 0;
-      if (!finalSuppId && supplier_name) {
-        const found = db.prepare('SELECT id FROM suppliers WHERE name LIKE ? OR company LIKE ? LIMIT 1').get(`%${supplier_name}%`, `%${supplier_name}%`) as { id: number } | undefined;
-        if (found) {
-          finalSuppId = found.id;
+      let resolvedSupplierId = Number(supplier_id) || 0;
+      let supplier = resolvedSupplierId
+        ? (db.prepare('SELECT * FROM suppliers WHERE id = ?').get(resolvedSupplierId) as Record<string, any> | undefined)
+        : undefined;
+
+      if (!supplier && provider_name && String(provider_name).trim()) {
+        const cleanProv = String(provider_name).trim();
+        supplier = db
+          .prepare('SELECT * FROM suppliers WHERE LOWER(company) = LOWER(?) OR LOWER(name) = LOWER(?) LIMIT 1')
+          .get(cleanProv, cleanProv) as Record<string, any> | undefined;
+        if (!supplier) {
+          const insSup = db
+            .prepare(`INSERT INTO suppliers (name, company, phone, notes) VALUES (?, ?, ?, ?)`)
+            .run(cleanProv, cleanProv, String(provider_phone || ''), 'Créé automatiquement via scan facture');
+          resolvedSupplierId = Number(insSup.lastInsertRowid);
+          supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(resolvedSupplierId) as Record<string, any>;
         } else {
-          const insSupp = db.prepare('INSERT INTO suppliers (name, company) VALUES (?, ?)').run(supplier_name, supplier_name);
-          finalSuppId = Number(insSupp.lastInsertRowid);
+          resolvedSupplierId = Number(supplier.id);
         }
       }
-      if (!finalSuppId) finalSuppId = 1;
 
-      const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(finalSuppId) as Record<string, any> | undefined;
-      const supplierName = supplier ? `${supplier.company || supplier.name}` : (supplier_name || 'Fournisseur Direct');
+      if (!resolvedSupplierId) resolvedSupplierId = 1;
+      const supplierName = supplier ? `${supplier.company || supplier.name}` : String(provider_name || 'Fournisseur Direct');
 
       let totalAmount = 0;
       for (const item of items) {
-        totalAmount += Number(item.quantity) * Number(item.unit_cost);
+        totalAmount += (Number(item.quantity) || 1) * (Number(item.unit_cost) || 0);
       }
       const paid = paid_amount !== undefined && paid_amount !== '' ? Number(paid_amount) : totalAmount;
       const remainingOwed = Math.max(0, totalAmount - paid);
@@ -1596,45 +1511,58 @@ const server = http.createServer(async (req, res) => {
       const purchaseRes = db.prepare(`
         INSERT INTO purchases (invoice_number, supplier_id, total_amount, paid_amount, remaining_owed, notes)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run(invRef, finalSuppId, totalAmount, paid, remainingOwed, notes || '');
+      `).run(invRef, resolvedSupplierId, totalAmount, paid, remainingOwed, notes || '');
 
       const purchaseId = Number(purchaseRes.lastInsertRowid);
+      const createdProducts: number[] = [];
 
       for (const item of items) {
-        let prod = item.product_id ? (db.prepare('SELECT * FROM products WHERE id = ?').get(Number(item.product_id)) as Record<string, any>) : null;
-        if (!prod && item.product_name) {
-          const newBarcode = item.barcode || `EAN-${Date.now().toString().slice(-8)}`;
-          const insRes = db.prepare(`
+        let prod = item.product_id
+          ? (db.prepare('SELECT * FROM products WHERE id = ?').get(Number(item.product_id)) as Record<string, any> | undefined)
+          : undefined;
+
+        const qty = Number(item.quantity) || 1;
+        const unitCost = Number(item.unit_cost) || Number(prod?.current_cost_price || 0);
+        const newRetail = item.new_retail_price
+          ? Number(item.new_retail_price)
+          : Number(prod?.retail_price || Math.round(unitCost * 1.25));
+        const newWholesale = item.new_wholesale_price
+          ? Number(item.new_wholesale_price)
+          : Number(prod?.wholesale_price || Math.round(unitCost * 1.12));
+
+        if (!prod && item.product_name && String(item.product_name).trim()) {
+          const cleanName = String(item.product_name).trim();
+          const sku = String(item.sku_or_ref || '').trim() || `SKU-${Date.now().toString().slice(-5)}-${Math.floor(Math.random() * 90 + 10)}`;
+          const barcode = String(item.barcode || '').trim() || `611${Date.now().toString().slice(-9)}${Math.floor(Math.random() * 9)}`;
+          const insProd = db.prepare(`
             INSERT INTO products (
               barcode, sku, model_number, brand, category,
               name_fr, name_ar, name_en,
               retail_price, wholesale_price, min_selling_price,
-              current_cost_price, last_cost_price, stock_quantity,
-              min_stock_alert, warranty_months, has_serial, woo_sync_status
+              current_cost_price, last_cost_price, stock_quantity, min_stock_alert,
+              warranty_months, has_serial, woo_sync_status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 2, 12, 0, 'pending')
           `).run(
-            newBarcode,
-            item.sku || newBarcode,
-            item.model_number || '',
-            item.brand || 'Générique',
-            item.category || 'Gros Électroménager',
-            item.product_name,
-            item.name_ar || item.product_name,
-            item.name_en || item.product_name,
-            Number(item.new_retail_price) || Math.round(Number(item.unit_cost) * 1.25),
-            Number(item.new_wholesale_price) || Math.round(Number(item.unit_cost) * 1.15),
-            Number(item.unit_cost) || 0,
-            Number(item.unit_cost) || 0,
-            Number(item.unit_cost) || 0
+            barcode,
+            sku,
+            sku,
+            String(item.brand || 'Générique').trim(),
+            String(item.category || 'Électroménager').trim(),
+            cleanName,
+            cleanName,
+            cleanName,
+            newRetail,
+            newWholesale,
+            Math.round(unitCost * 1.05),
+            unitCost,
+            unitCost
           );
-          prod = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(insRes.lastInsertRowid)) as Record<string, any>;
+          const newProdId = Number(insProd.lastInsertRowid);
+          createdProducts.push(newProdId);
+          prod = db.prepare('SELECT * FROM products WHERE id = ?').get(newProdId) as Record<string, any>;
         }
-        if (!prod) continue;
 
-        const qty = Number(item.quantity) || 1;
-        const unitCost = Number(item.unit_cost) || Number(prod.current_cost_price);
-        const newRetail = item.new_retail_price ? Number(item.new_retail_price) : Number(prod.retail_price);
-        const newWholesale = item.new_wholesale_price ? Number(item.new_wholesale_price) : Number(prod.wholesale_price);
+        if (!prod) continue;
         const previousCost = Number(prod.current_cost_price);
 
         db.prepare(`
@@ -1662,7 +1590,7 @@ const server = http.createServer(async (req, res) => {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           prod.id,
-          Number(supplier_id) || 1,
+          resolvedSupplierId,
           supplierName,
           unitCost,
           previousCost,
@@ -1688,7 +1616,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       broadcastEvent('PURCHASE_RECORDED', { purchaseId, invoice_number: invRef, totalAmount });
-      sendJson(res, 200, { success: true, purchaseId, invoice_number: invRef });
+      sendJson(res, 200, { success: true, purchaseId, invoice_number: invRef, supplier_id: resolvedSupplierId, createdProducts });
       return;
     }
 
@@ -2000,83 +1928,101 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (pathname === '/api/ai/scan-bill' && method === 'POST') {
-      const { imageBase64, rawText, mimeType } = await readJsonBody(req);
-      const settings = getSettingsMap();
-      const aiRes = await parseProviderBillWithAi(
-        settings.ai_provider || 'gemini',
-        settings.ai_api_key || '',
-        imageBase64,
-        rawText,
-        mimeType || 'image/jpeg'
-      );
+    if (pathname === '/api/ai/scan-invoice' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const imageBase64 = String(body.imageBase64 || '');
+      const mimeType = String(body.mimeType || 'image/jpeg');
+      const rawText = String(body.rawText || '');
 
-      const parsed = aiRes.data || {};
-      const providerName = String(parsed.provider_name || 'Fournisseur Réception').trim();
-
-      let matchedSupplier: Record<string, any> | undefined;
-      if (providerName) {
-        matchedSupplier = db.prepare(`
-          SELECT id, name, company, phone FROM suppliers
-          WHERE name LIKE ? OR company LIKE ?
-          LIMIT 1
-        `).get(`%${providerName}%`, `%${providerName}%`) as Record<string, any> | undefined;
+      if (!imageBase64 && !rawText.trim()) {
+        sendJson(res, 400, { error: 'Veuillez fournir une image de facture ou du texte.' });
+        return;
       }
 
-      const allSuppliers = db.prepare('SELECT id, name, company FROM suppliers ORDER BY id ASC').all();
+      const settings = getSettingsMap();
+      const aiProvider = String(body.ai_provider || settings.ai_provider || 'gemini');
+      const aiApiKey = String(body.ai_api_key || settings.ai_api_key || '');
 
-      const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
-      const enrichedItems = rawItems.map((it: any) => {
-        const prodName = String(it.product_name || '').trim();
-        const barcode = String(it.barcode || '').trim();
-        const model = String(it.model_number || '').trim();
+      const aiRes = await callAiInvoiceExtraction(aiProvider, aiApiKey, imageBase64, mimeType, rawText);
+      if (!aiRes.data) {
+        sendJson(res, 400, { error: aiRes.error || 'Impossible d\'extraire la facture.' });
+        return;
+      }
 
-        let match: Record<string, any> | undefined;
-        if (barcode) {
-          match = db.prepare('SELECT id, name_fr, barcode, sku, retail_price, wholesale_price, current_cost_price, stock_quantity FROM products WHERE barcode = ?').get(barcode) as Record<string, any> | undefined;
-        }
-        if (!match && model) {
-          match = db.prepare('SELECT id, name_fr, barcode, sku, retail_price, wholesale_price, current_cost_price, stock_quantity FROM products WHERE model_number LIKE ? LIMIT 1').get(`%${model}%`) as Record<string, any> | undefined;
-        }
-        if (!match && prodName) {
-          match = db.prepare('SELECT id, name_fr, barcode, sku, retail_price, wholesale_price, current_cost_price, stock_quantity FROM products WHERE name_fr LIKE ? LIMIT 1').get(`%${prodName.slice(0, 20)}%`) as Record<string, any> | undefined;
+      const extracted = aiRes.data;
+      const provName = String(extracted.provider_name || '').trim();
+      const allSuppliers = db.prepare('SELECT id, name, company, phone FROM suppliers').all() as Record<string, any>[];
+      let matchedSupplier: Record<string, any> | undefined;
+      if (provName) {
+        const lowerProv = provName.toLowerCase();
+        matchedSupplier = allSuppliers.find(
+          (s) =>
+            String(s.company || '').toLowerCase().includes(lowerProv) ||
+            lowerProv.includes(String(s.company || '').toLowerCase()) ||
+            String(s.name || '').toLowerCase().includes(lowerProv)
+        );
+      }
+
+      const allProducts = db
+        .prepare('SELECT id, barcode, sku, model_number, brand, name_fr, current_cost_price, retail_price, wholesale_price FROM products')
+        .all() as Record<string, any>[];
+
+      const rawItems = Array.isArray(extracted.items) ? extracted.items : [];
+      const matchedItems = rawItems.map((it: any) => {
+        const pName = String(it.product_name || '').trim();
+        const ref = String(it.sku_or_ref || '').trim().toLowerCase();
+        const nameLower = pName.toLowerCase();
+        const tokens = nameLower.split(/[\s\-_,/]+/).filter((w) => w.length >= 3);
+
+        let bestMatch: Record<string, any> | undefined;
+        let bestScore = 0;
+        for (const p of allProducts) {
+          let score = 0;
+          const pSku = String(p.sku || '').toLowerCase();
+          const pMod = String(p.model_number || '').toLowerCase();
+          const pBar = String(p.barcode || '').toLowerCase();
+          const pFull = String(p.name_fr || '').toLowerCase();
+
+          if (ref && (pSku === ref || pMod === ref || pBar === ref)) score += 100;
+          else if (ref && (pFull.includes(ref) || pMod.includes(ref))) score += 45;
+
+          for (const tok of tokens) {
+            if (pFull.includes(tok)) score += 10;
+            if (pMod && pMod.includes(tok)) score += 12;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestMatch = p;
+          }
         }
 
+        const matched = bestScore >= 20 ? bestMatch : undefined;
         const unitCost = Number(it.unit_cost) || 0;
-        const qty = Math.max(1, Number(it.quantity) || 1);
-        const retailPrice = match ? Number(match.retail_price) : Math.round(unitCost * 1.25);
-        const wholesalePrice = match ? Number(match.wholesale_price) : Math.round(unitCost * 1.15);
+        const retailEst = Number(it.suggested_retail_price) || Number(matched?.retail_price || Math.round(unitCost * 1.25));
 
         return {
-          product_name: prodName || (match ? match.name_fr : 'Article sans nom'),
-          brand: it.brand || '',
-          model_number: model,
-          barcode: barcode || (match ? match.barcode : ''),
-          quantity: qty,
+          product_name: pName || (matched?.name_fr ?? 'Article Facture'),
+          sku_or_ref: String(it.sku_or_ref || matched?.model_number || matched?.sku || ''),
+          brand: String(it.brand || matched?.brand || ''),
+          quantity: Math.max(1, Number(it.quantity) || 1),
           unit_cost: unitCost,
-          total_price: Number(it.total_price) || (qty * unitCost),
-          product_id: match ? match.id : null,
-          matched_product_name: match ? match.name_fr : null,
-          current_stock: match ? match.stock_quantity : 0,
-          current_cost_price: match ? match.current_cost_price : null,
-          new_retail_price: retailPrice,
-          new_wholesale_price: wholesalePrice,
-          is_new_product: !match,
+          suggested_retail_price: retailEst,
+          matched_product_id: matched ? Number(matched.id) : null,
+          matched_product_name: matched ? String(matched.name_fr) : null,
+          current_cost_price: matched ? Number(matched.current_cost_price) : 0,
         };
       });
 
       sendJson(res, 200, {
         success: true,
-        provider: aiRes.provider,
-        provider_name: providerName,
-        supplier_id: matchedSupplier ? matchedSupplier.id : (allSuppliers[0]?.id || 1),
-        matched_supplier: matchedSupplier || null,
-        available_suppliers: allSuppliers,
-        invoice_number: String(parsed.invoice_number || `BL-${Date.now().toString().slice(-6)}`),
-        invoice_date: String(parsed.invoice_date || new Date().toISOString().slice(0, 10)),
-        total_amount: Number(parsed.total_amount) || enrichedItems.reduce((acc: number, it: any) => acc + (it.total_price || 0), 0),
-        items: enrichedItems,
-        error: aiRes.error,
+        source: aiRes.provider,
+        provider_name: provName,
+        provider_phone: String(extracted.provider_phone || matchedSupplier?.phone || ''),
+        matched_supplier_id: matchedSupplier ? Number(matchedSupplier.id) : null,
+        invoice_number: String(extracted.invoice_number || `BL-${Date.now().toString().slice(-6)}`),
+        invoice_date: String(extracted.invoice_date || new Date().toISOString().slice(0, 10)),
+        total_amount: Number(extracted.total_amount) || matchedItems.reduce((s: number, i: any) => s + i.quantity * i.unit_cost, 0),
+        items: matchedItems,
       });
       return;
     }

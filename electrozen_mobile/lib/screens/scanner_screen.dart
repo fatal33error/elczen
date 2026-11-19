@@ -12,7 +12,7 @@ class ScannerScreen extends StatefulWidget {
   final VoidCallback? onOpenCatalog;
   final VoidCallback? onOpenPairing;
   final VoidCallback? onOpenSalesHistory;
-  final VoidCallback? onOpenProviderBill;
+  final VoidCallback? onOpenInvoiceScanner;
 
   const ScannerScreen({
     super.key,
@@ -23,7 +23,7 @@ class ScannerScreen extends StatefulWidget {
     this.onOpenCatalog,
     this.onOpenPairing,
     this.onOpenSalesHistory,
-    this.onOpenProviderBill,
+    this.onOpenInvoiceScanner,
   });
 
   @override
@@ -496,7 +496,7 @@ class ScannerScreenState extends State<ScannerScreen> {
                   inkPrimary: inkPrimary,
                   inkMuted: inkMuted,
                   isMonetary: true,
-                  onTap: widget.onOpenSalesHistory ?? widget.onOpenPos,
+                  onTap: widget.onOpenPos,
                 ),
               ),
             ],
@@ -520,20 +520,6 @@ class ScannerScreenState extends State<ScannerScreen> {
             runSpacing: 8,
             children: [
               ActionChip(
-                avatar: const Icon(Icons.document_scanner_outlined, size: 16, color: Color(0xFF10B981)),
-                label: const Text('Facture Fournisseur'),
-                backgroundColor: subtleBg,
-                side: BorderSide(color: borderCol),
-                onPressed: widget.onOpenProviderBill,
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.receipt_long_outlined, size: 16, color: Color(0xFF6D28D9)),
-                label: const Text('Historique Ventes'),
-                backgroundColor: subtleBg,
-                side: BorderSide(color: borderCol),
-                onPressed: widget.onOpenSalesHistory,
-              ),
-              ActionChip(
                 avatar: const Icon(Icons.add, size: 16, color: Color(0xFF1C61E7)),
                 label: const Text('Nouveau Produit'),
                 backgroundColor: subtleBg,
@@ -554,6 +540,22 @@ class ScannerScreenState extends State<ScannerScreen> {
                 side: BorderSide(color: borderCol),
                 onPressed: widget.onOpenPos,
               ),
+              if (widget.onOpenInvoiceScanner != null)
+                ActionChip(
+                  avatar: const Icon(Icons.document_scanner_outlined, size: 16, color: Color(0xFF059669)),
+                  label: const Text('Scanner Facture Fournisseur'),
+                  backgroundColor: subtleBg,
+                  side: BorderSide(color: borderCol),
+                  onPressed: widget.onOpenInvoiceScanner,
+                ),
+              if (widget.onOpenSalesHistory != null)
+                ActionChip(
+                  avatar: const Icon(Icons.history, size: 16, color: Color(0xFFD97706)),
+                  label: const Text('Historique Ventes & Garanties'),
+                  backgroundColor: subtleBg,
+                  side: BorderSide(color: borderCol),
+                  onPressed: widget.onOpenSalesHistory,
+                ),
             ],
           ),
 
