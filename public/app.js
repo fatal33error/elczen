@@ -145,6 +145,8 @@ const state = {
   salesPayFilter: 'all',
   productModalExpanded: false,
   productPhotoAiLoading: false,
+  productProPhotoLoading: false,
+  productBoxImages: [],
   customerLedger: null,
   freePaymentAmount: '',
   inspectorOpen: false,
@@ -2534,11 +2536,14 @@ function renderProductModal() {
                 <div style="font-size:11px;color:#64748b">Importez 1 ou 2 photos de la boîte/étiquette : l’IA lit marque, modèle et caractéristiques.</div>
               </div>
             </div>
-            <div style="display:flex;gap:8px;align-items:center">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <label class="btn btn-sm btn-dark" style="cursor:pointer;margin:0">
                 <input type="file" id="input-prod-photos-ai" accept="image/*" multiple style="display:none" />
                 <span>${state.productPhotoAiLoading ? 'Analyse photos...' : 'Importer Photo(s) + Extraire IA'}</span>
               </label>
+              <button type="button" class="btn btn-sm btn-primary" id="btn-gen-pro-photo" ${state.productProPhotoLoading ? 'disabled' : ''}>
+                ${state.productProPhotoLoading ? 'Création Studio...' : 'Photo Pro Studio (Fond Blanc)'}
+              </button>
             </div>
           </div>
 
@@ -3328,19 +3333,20 @@ function attachEvents() {
             reader.readAsDataURL(file);
           });
         const images = await Promise.all(files.map(readAsB64));
-        // Upload first photo as product image
+        state.productBoxImages = images;
+        // Generate clean studio photo + extract product specs in parallel
         let uploadedImageUrl = state.prefillProduct?.image_url || state.editingProduct?.image_url || '';
-        try {
-          const upRes = await fetch('/api/products/upload-image', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(images[0]),
-          });
-          if (upRes.ok) {
-            const upData = await upRes.json();
-            if (upData.image_url) uploadedImageUrl = upData.image_url;
-          }
-        } catch {}
+        const proPromise = fetch('/api/ai/generate-pro-product-photo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            images,
+            product_name: document.getElementById('prod-name-fr')?.value || '',
+            brand: document.getElementById('prod-brand')?.value || '',
+          }),
+        })
+          .then((r) => r.json())
+          .catch(() => null);
 
         // Extract product info from photos via AI Vision
         const exRes = await fetch('/api/ai/extract-product-from-images', {
@@ -3349,6 +3355,22 @@ function attachEvents() {
           body: JSON.stringify({ images }),
         });
         const exData = await exRes.json();
+        const proData = await proPromise;
+        if (proData?.success && proData.image_url) {
+          uploadedImageUrl = proData.image_url;
+        } else {
+          try {
+            const upRes = await fetch('/api/products/upload-image', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(images[0]),
+            });
+            if (upRes.ok) {
+              const upData = await upRes.json();
+              if (upData.image_url) uploadedImageUrl = upData.image_url;
+            }
+          } catch {}
+        }
         state.productPhotoAiLoading = false;
         if (exRes.ok && exData.success) {
           const targetObj = state.editingProduct || state.prefillProduct || {};
@@ -3391,6 +3413,47 @@ function attachEvents() {
     };
   }
 
+  const btnGenProPhoto = document.getElementById('btn-gen-pro-photo');
+  if (btnGenProPhoto) {
+    btnGenProPhoto.onclick = async () => {
+      const currentImgUrl = document.getElementById('prod-image-url')?.value || '';
+      if (state.productBoxImages.length === 0 && !currentImgUrl) {
+        document.getElementById('input-prod-photos-ai')?.click();
+        return;
+      }
+      state.productProPhotoLoading = true;
+      render();
+      try {
+        const res = await fetch('/api/ai/generate-pro-product-photo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            images: state.productBoxImages,
+            image_url: currentImgUrl,
+            product_name: document.getElementById('prod-name-fr')?.value || '',
+            brand: document.getElementById('prod-brand')?.value || '',
+          }),
+        });
+        const data = await res.json();
+        state.productProPhotoLoading = false;
+        if (res.ok && data.image_url) {
+          if (state.editingProduct) state.editingProduct.image_url = data.image_url;
+          else state.prefillProduct = { ...(state.prefillProduct || {}), image_url: data.image_url };
+          state.internetLookupBanner = {
+            ok: true,
+            msg: `Photo Pro Studio générée avec succès (${data.method === 'ai_studio_gen' ? 'IA Générative' : 'Détourage Vision Studio'}) !`,
+          };
+        } else {
+          state.internetLookupBanner = { ok: false, msg: data.error || 'Échec création photo studio.' };
+        }
+      } catch (err) {
+        state.productProPhotoLoading = false;
+        state.internetLookupBanner = { ok: false, msg: `Erreur photo pro : ${err.message}` };
+      }
+      render();
+    };
+  }
+
   const btnCloseProdModal = document.getElementById('btn-close-prod-modal');
   if (btnCloseProdModal) {
     btnCloseProdModal.onclick = () => {
@@ -3401,6 +3464,7 @@ function attachEvents() {
       state.cameraScanActive = false;
       state.productModalOpen = false;
       state.productModalExpanded = false;
+      state.productBoxImages = [];
       state.prefillProduct = null;
       state.internetLookupBanner = null;
       render();

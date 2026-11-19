@@ -553,6 +553,33 @@ class ElectroZenApiService {
     return (decoded['image_url'] ?? '').toString();
   }
 
+  Future<Map<String, dynamic>> generateProProductPhoto({
+    List<Map<String, String>> images = const [],
+    String imageUrl = '',
+    String productName = '',
+    String brand = '',
+  }) async {
+    final response = await _authorizedRequest(
+      () => http
+          .post(
+            Uri.parse('$baseUrl/api/ai/generate-pro-product-photo'),
+            headers: _headers,
+            body: jsonEncode({
+              'images': images,
+              'image_url': imageUrl,
+              'product_name': productName,
+              'brand': brand,
+            }),
+          )
+          .timeout(const Duration(seconds: 38)),
+    );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(decoded['error'] ?? 'Erreur génération photo studio (HTTP ${response.statusCode})');
+    }
+    return decoded;
+  }
+
   Future<Map<String, dynamic>> scanSupplierInvoice({
     String imageBase64 = '',
     String mimeType = 'image/jpeg',

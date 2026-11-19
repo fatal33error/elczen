@@ -4,6 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import {
   db,
   dbPath,
@@ -401,6 +405,186 @@ Return ONLY valid JSON without markdown code fences.`;
     return { data: parsed, provider };
   } catch (err: any) {
     return { data: null, provider, error: err?.message || 'Erreur réseau IA Vision' };
+  }
+}
+
+let geminiImageQuotaBlockedUntil = 0;
+
+async function callGenerateProProductPhoto(
+  providerRaw: string,
+  apiKey: string,
+  images: Array<{ imageBase64: string; mimeType?: string }>,
+  uploadDir: string,
+  productName = '',
+  brand = ''
+): Promise<{ imageUrl?: string; method?: string; best_index?: number; box_2d?: number[]; error?: string }> {
+  const provider = (providerRaw || 'gemini').toLowerCase();
+  const key = String(apiKey || '').trim();
+  if (!Array.isArray(images) || images.length === 0) {
+    return { error: 'Veuillez fournir au moins une photo du produit ou de sa boîte.' };
+  }
+
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  const studioPrompt = `Extract ONLY the main electronics/appliance product shown in these photos (${brand} ${productName}). Remove the cardboard box, shelves, background clutter, price stickers, and text labels. Render a clean, high-resolution, professional e-commerce studio photograph centered on a pure white (#FFFFFF) background with realistic soft ground shadow and sharp product details.`;
+
+  // Tier 1: Try native AI Image Generation (skip for 10 min if Gemini free-tier quota is 0)
+  if (key && provider === 'gemini' && Date.now() > geminiImageQuotaBlockedUntil) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 16000);
+      const parts: any[] = [{ text: studioPrompt }];
+      const firstImg = images[0];
+      const cleanB64 = String(firstImg?.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+      if (cleanB64) parts.push({ inline_data: { mime_type: firstImg.mimeType || 'image/jpeg', data: cleanB64 } });
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`,
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+          }),
+        }
+      );
+      clearTimeout(timer);
+      if (resp.status === 429) {
+        geminiImageQuotaBlockedUntil = Date.now() + 10 * 60 * 1000;
+      } else if (resp.ok) {
+        const json = (await resp.json()) as any;
+        const outParts = json?.candidates?.[0]?.content?.parts || [];
+        const imgPart = outParts.find((p: any) => p.inlineData?.data || p.inline_data?.data);
+        const outData = imgPart?.inlineData || imgPart?.inline_data;
+        if (outData?.data) {
+          const outMime = String(outData.mimeType || 'image/png').toLowerCase();
+          const ext = outMime.includes('png') ? '.png' : '.jpg';
+          const outFile = `pro-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}${ext}`;
+          fs.writeFileSync(path.join(uploadDir, outFile), Buffer.from(outData.data, 'base64'));
+          return { imageUrl: `/uploads/products/${outFile}`, method: 'ai_studio_gen' };
+        }
+      }
+    } catch {}
+  }
+
+  // Tier 2: Vision Bounding-Box Localization + Automated Studio White-Background Cutout Engine
+  let bestIdx = 0;
+  let box: [number, number, number, number] = [0, 0, 1000, 1000];
+
+  if (key && (provider === 'gemini' || provider === 'openai')) {
+    try {
+      const bboxPrompt =
+        'Inspect these photos of a product or its retail box. Choose the image index (0-based) that has the CLEANEST, most unobstructed product illustration/view (prefer a view surrounded by a uniform white/plain background rather than split dark/green backgrounds if available). Return ONLY strict JSON with a tight normalized [ymin, xmin, ymax, xmax] bounding box (0-1000) tightly framing ONLY the physical appliance itself (NOT the outer cardboard box, NOT text/icons around it): {"best_index": 0, "box_2d": [ymin, xmin, ymax, xmax]}';
+
+      let bboxText = '';
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 28000);
+
+      if (provider === 'openai') {
+        const content: any[] = [{ type: 'text', text: bboxPrompt }];
+        for (const img of images.slice(0, 4)) {
+          const cleanB64 = String(img.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+          if (cleanB64) content.push({ type: 'image_url', image_url: { url: `data:${img.mimeType || 'image/jpeg'};base64,${cleanB64}` } });
+        }
+        const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+          body: JSON.stringify({ model: 'gpt-4o-mini', temperature: 0.1, response_format: { type: 'json_object' }, messages: [{ role: 'user', content }] }),
+        });
+        clearTimeout(timer);
+        if (resp.ok) {
+          const json = (await resp.json()) as any;
+          bboxText = json?.choices?.[0]?.message?.content || '';
+        }
+      } else {
+        const parts: any[] = [{ text: bboxPrompt }];
+        for (const img of images.slice(0, 4)) {
+          const cleanB64 = String(img.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+          if (cleanB64) parts.push({ inline_data: { mime_type: img.mimeType || 'image/jpeg', data: cleanB64 } });
+        }
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${encodeURIComponent(key)}`,
+          {
+            method: 'POST',
+            signal: controller.signal,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts }], generationConfig: { responseMimeType: 'application/json', temperature: 0.1 } }),
+          }
+        );
+        clearTimeout(timer);
+        if (resp.ok) {
+          const json = (await resp.json()) as any;
+          bboxText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        }
+      }
+
+      const parsed = parseJsonFromAiText(bboxText);
+      if (parsed && Array.isArray(parsed.box_2d) && parsed.box_2d.length === 4) {
+        bestIdx = Math.max(0, Math.min(images.length - 1, Number(parsed.best_index) || 0));
+        box = [
+          Math.max(0, Math.min(990, Number(parsed.box_2d[0]) || 0)),
+          Math.max(0, Math.min(990, Number(parsed.box_2d[1]) || 0)),
+          Math.max(10, Math.min(1000, Number(parsed.box_2d[2]) || 1000)),
+          Math.max(10, Math.min(1000, Number(parsed.box_2d[3]) || 1000)),
+        ];
+      }
+    } catch (err) {
+      console.error('Vision bbox error:', err);
+    }
+  }
+
+  const chosen = images[bestIdx] || images[0];
+  const cleanB64 = String(chosen.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+  if (!cleanB64) return { error: 'Image vide.' };
+
+  const tmpIn = path.join(os.tmpdir(), `ez-in-${Date.now()}.jpg`);
+  const outFile = `pro-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}.jpg`;
+  const outPath = path.join(uploadDir, outFile);
+  fs.writeFileSync(tmpIn, Buffer.from(cleanB64, 'base64'));
+
+  try {
+    const psScript = path.resolve(import.meta.dirname, 'studio_photo.ps1');
+    if (process.platform === 'win32' && fs.existsSync(psScript)) {
+      await execFileAsync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          psScript,
+          '-InputPath',
+          tmpIn,
+          '-OutputPath',
+          outPath,
+          '-YMin',
+          String(Math.round(box[0])),
+          '-XMin',
+          String(Math.round(box[1])),
+          '-YMax',
+          String(Math.round(box[2])),
+          '-XMax',
+          String(Math.round(box[3])),
+        ],
+        { timeout: 15000 }
+      );
+      if (fs.existsSync(outPath)) {
+        return { imageUrl: `/uploads/products/${outFile}`, method: 'vision_studio_cutout', best_index: bestIdx, box_2d: box };
+      }
+    }
+    // Non-Windows fallback: save uploaded image
+    fs.copyFileSync(tmpIn, outPath);
+    return { imageUrl: `/uploads/products/${outFile}`, method: 'direct_upload' };
+  } catch (err: any) {
+    return { error: err?.message || 'Erreur traitement photo studio' };
+  } finally {
+    try {
+      fs.unlinkSync(tmpIn);
+    } catch {}
   }
 }
 
@@ -2252,6 +2436,46 @@ Return ONLY strict valid JSON with keys:
       }
 
       sendJson(res, 400, { error: 'Veuillez configurer une clé API IA dans Paramètres.' });
+      return;
+    }
+
+    if (pathname === '/api/ai/generate-pro-product-photo' && method === 'POST') {
+      const body = await readJsonBody(req);
+      let images: Array<{ imageBase64: string; mimeType?: string }> = Array.isArray(body.images) ? body.images : [];
+      const imageUrl = String(body.image_url || '').trim();
+      if (images.length === 0 && imageUrl.startsWith('/uploads/')) {
+        const localFile = path.join(publicDir, imageUrl.replace(/^\/+/, ''));
+        if (localFile.startsWith(publicDir) && fs.existsSync(localFile)) {
+          const ext = path.extname(localFile).toLowerCase();
+          const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
+          images = [{ imageBase64: fs.readFileSync(localFile).toString('base64'), mimeType: mime }];
+        }
+      }
+
+      const settings = getSettingsMap();
+      const aiProvider = String(body.ai_provider || settings.ai_provider || 'gemini');
+      const aiApiKey = String(body.ai_api_key || settings.ai_api_key || '');
+      const uploadDir = path.join(publicDir, 'uploads', 'products');
+
+      const result = await callGenerateProProductPhoto(
+        aiProvider,
+        aiApiKey,
+        images,
+        uploadDir,
+        String(body.product_name || ''),
+        String(body.brand || '')
+      );
+      if (!result.imageUrl) {
+        sendJson(res, 400, { error: result.error || 'Échec de génération de la photo studio.' });
+        return;
+      }
+      sendJson(res, 200, {
+        success: true,
+        image_url: result.imageUrl,
+        method: result.method,
+        best_index: result.best_index,
+        box_2d: result.box_2d,
+      });
       return;
     }
 

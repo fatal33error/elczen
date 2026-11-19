@@ -287,14 +287,18 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
         _internetStatusMsg = 'Envoi de la photo produit au serveur...';
       });
       final bytes = await file.readAsBytes();
+      final b64 = base64Encode(bytes);
       final mime = file.name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-      final uploadedUrl = await widget.api.uploadProductImage(base64Encode(bytes), mimeType: mime);
+      _capturedBoxPhotos
+        ..clear()
+        ..add({'imageBase64': b64, 'mimeType': mime});
+      final uploadedUrl = await widget.api.uploadProductImage(b64, mimeType: mime);
       if (!mounted) return;
       setState(() {
         _imageUrl = uploadedUrl;
         _busyPhotoAi = false;
         _internetStatusOk = true;
-        _internetStatusMsg = 'Photo produit enregistrée et liée à la fiche !';
+        _internetStatusMsg = 'Photo ajoutée ! Appuyez sur "Photo Pro Studio" pour générer le détourage sur fond blanc.';
       });
     } catch (e) {
       if (!mounted) return;
@@ -302,6 +306,43 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
         _busyPhotoAi = false;
         _internetStatusOk = false;
         _internetStatusMsg = 'Erreur photo: ${e.toString().replaceFirst("Exception: ", "")}';
+      });
+    }
+  }
+
+  Future<void> _generateProPhoto() async {
+    if (_capturedBoxPhotos.isEmpty && _imageUrl.isEmpty) {
+      await _openMultiPhotoExtractorSheet();
+      return;
+    }
+    setState(() {
+      _busyPhotoAi = true;
+      _internetStatusOk = true;
+      _internetStatusMsg = 'Génération de la photo produit studio sur fond blanc...';
+    });
+    try {
+      final res = await widget.api.generateProProductPhoto(
+        images: _capturedBoxPhotos,
+        imageUrl: _imageUrl,
+        productName: _nameFrCtrl.text.trim(),
+        brand: _brandCtrl.text.trim(),
+      );
+      if (!mounted) return;
+      final newUrl = (res['image_url'] ?? '').toString();
+      setState(() {
+        _busyPhotoAi = false;
+        if (newUrl.isNotEmpty) _imageUrl = newUrl;
+        _internetStatusOk = true;
+        _internetStatusMsg = res['method'] == 'ai_studio_gen'
+            ? 'Photo Pro Studio générée par IA !'
+            : 'Photo Pro Studio détourée sur fond blanc avec succès !';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busyPhotoAi = false;
+        _internetStatusOk = false;
+        _internetStatusMsg = e.toString().replaceFirst('Exception: ', '');
       });
     }
   }
@@ -339,19 +380,34 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
             setState(() {
               _busyPhotoAi = true;
               _internetStatusOk = true;
-              _internetStatusMsg = 'Analyse Vision IA de ${_capturedBoxPhotos.length} photo(s) en cours...';
+              _internetStatusMsg = 'Extraction fiche + Création Photo Pro Studio depuis ${_capturedBoxPhotos.length} photo(s)...';
             });
             try {
-              if (_imageUrl.isEmpty) {
+              final extractFuture = widget.api.extractProductFromImages(
+                _capturedBoxPhotos,
+                hintName: _nameFrCtrl.text.trim(),
+              );
+              final proPhotoFuture = widget.api
+                  .generateProProductPhoto(
+                    images: _capturedBoxPhotos,
+                    productName: _nameFrCtrl.text.trim(),
+                    brand: _brandCtrl.text.trim(),
+                  )
+                  .catchError((_) => <String, dynamic>{});
+
+              final results = await Future.wait([extractFuture, proPhotoFuture]);
+              final res = results[0];
+              final proRes = results[1];
+              if (!mounted) return;
+              final proUrl = (proRes['image_url'] ?? '').toString();
+              if (proUrl.isNotEmpty) {
+                _imageUrl = proUrl;
+              } else if (_imageUrl.isEmpty) {
                 try {
                   final first = _capturedBoxPhotos.first;
                   _imageUrl = await widget.api.uploadProductImage(first['imageBase64']!, mimeType: first['mimeType'] ?? 'image/jpeg');
                 } catch (_) {}
               }
-              final res = await widget.api.extractProductFromImages(
-                _capturedBoxPhotos,
-                hintName: _nameFrCtrl.text.trim(),
-              );
               if (!mounted) return;
               setState(() {
                 _busyPhotoAi = false;
@@ -371,7 +427,9 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                 if ((res['description_en'] ?? '').toString().isNotEmpty) _descEnCtrl.text = res['description_en'].toString();
                 if ((res['warranty_months'] as num?) != null) _warrantyCtrl.text = '${(res['warranty_months'] as num).toInt()}';
                 _internetStatusOk = true;
-                _internetStatusMsg = 'Fiche extraite depuis ${_capturedBoxPhotos.length} photo(s) (${res['source']?.toString().toUpperCase()}) !';
+                _internetStatusMsg = proUrl.isNotEmpty
+                    ? 'Infos extraites + Photo Pro Studio créée (${res['source']?.toString().toUpperCase()}) !'
+                    : 'Fiche extraite depuis ${_capturedBoxPhotos.length} photo(s) (${res['source']?.toString().toUpperCase()}) !';
               });
             } catch (e) {
               if (!mounted) return;
@@ -708,6 +766,16 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                             onPressed: _busyPhotoAi ? null : _openMultiPhotoExtractorSheet,
                             icon: const Icon(Icons.auto_awesome, size: 16),
                             label: const Text('Lire Photos Boîte (IA)', style: TextStyle(fontSize: 12)),
+                          ),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF1C61E7),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            ),
+                            onPressed: _busyPhotoAi ? null : _generateProPhoto,
+                            icon: const Icon(Icons.wallpaper_outlined, size: 16),
+                            label: const Text('Photo Pro Studio', style: TextStyle(fontSize: 12)),
                           ),
                           OutlinedButton.icon(
                             style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
