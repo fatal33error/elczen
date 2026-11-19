@@ -2,18 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/printing_service.dart';
 import '../widgets/barcode_scanner_modal.dart';
 
 class MobilePosScreen extends StatefulWidget {
   final ElectroZenApiService api;
   final List<MobileCartItem> cart;
   final VoidCallback onCartUpdated;
+  final VoidCallback? onOpenSalesHistory;
 
   const MobilePosScreen({
     super.key,
     required this.api,
     required this.cart,
     required this.onCartUpdated,
+    this.onOpenSalesHistory,
   });
 
   @override
@@ -277,16 +280,82 @@ class _MobilePosScreenState extends State<MobilePosScreen> {
         _paidAmountCtrl.clear();
       });
       widget.onCartUpdated();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Vente validée (${res["invoice_number"] ?? "OK"}) — Synchronisée sur ELECTROZEN Windows'),
-        ),
-      );
+      _showPrintReceiptDialog(res);
     } catch (e) {
       if (!mounted) return;
       setState(() => _submitting = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erreur vente: $e')));
     }
+  }
+
+  Future<void> _showPrintReceiptDialog(Map<String, dynamic> sale) async {
+    final settings = await widget.api.fetchStoreSettings();
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.check_circle, color: Color(0xFF10B981), size: 24),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Vente validée (${sale["invoice_number"] ?? "FAC"})',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: const [
+              Text('La transaction a été synchronisée sur ELECTROZEN Windows.'),
+              SizedBox(height: 10),
+              Text('Souhaitez-vous imprimer le ticket client ?', style: TextStyle(fontWeight: FontWeight.w700)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Fermer'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                try {
+                  await PrintingService.printA4Invoice(sale: sale, storeSettings: settings);
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erreur impression: $e')));
+                }
+              },
+              icon: const Icon(Icons.print, size: 16),
+              label: const Text('Facture A4'),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF203361),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () async {
+                Navigator.pop(ctx);
+                try {
+                  await PrintingService.printThermalReceipt(sale: sale, storeSettings: settings);
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erreur impression: $e')));
+                }
+              },
+              icon: const Icon(Icons.receipt_long, size: 16),
+              label: const Text('Ticket 80mm'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -312,14 +381,28 @@ class _MobilePosScreenState extends State<MobilePosScreen> {
                     'CAISSE POS MOBILE',
                     style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF71717A)),
                   ),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'retail', label: Text('Détail', style: TextStyle(fontSize: 11.5))),
-                      ButtonSegment(value: 'wholesale', label: Text('Gros', style: TextStyle(fontSize: 11.5))),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (widget.onOpenSalesHistory != null) ...[
+                        TextButton.icon(
+                          style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: EdgeInsets.zero),
+                          onPressed: widget.onOpenSalesHistory,
+                          icon: const Icon(Icons.receipt_long_outlined, size: 16),
+                          label: const Text('Historique', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700)),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(value: 'retail', label: Text('Détail', style: TextStyle(fontSize: 11.5))),
+                          ButtonSegment(value: 'wholesale', label: Text('Gros', style: TextStyle(fontSize: 11.5))),
+                        ],
+                        selected: {_priceTier},
+                        onSelectionChanged: (s) => _applyPriceTier(s.first),
+                        style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                      ),
                     ],
-                    selected: {_priceTier},
-                    onSelectionChanged: (s) => _applyPriceTier(s.first),
-                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
                   ),
                 ],
               ),

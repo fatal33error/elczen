@@ -97,8 +97,8 @@ class _PairingScreenState extends State<PairingScreen> {
 
   void _handleQrPayload(String raw) {
     try {
-      final decoded = jsonDecode(raw) as Map<String, dynamic>;
-      if (decoded['host'] != null) {
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is Map && decoded['host'] != null) {
         setState(() {
           _hostCtrl.text = decoded['host'].toString();
           _portCtrl.text = (decoded['port'] ?? 4000).toString();
@@ -107,16 +107,15 @@ class _PairingScreenState extends State<PairingScreen> {
         _saveAndPair();
         return;
       }
-    } catch (_) {
-      final uri = Uri.tryParse(raw.trim());
-      if (uri != null && uri.host.isNotEmpty) {
-        setState(() {
-          _hostCtrl.text = uri.host;
-          if (uri.port > 0) _portCtrl.text = uri.port.toString();
-        });
-        _saveAndPair();
-        return;
-      }
+    } catch (_) {}
+    final uri = Uri.tryParse(raw.trim());
+    if (uri != null && uri.host.isNotEmpty) {
+      setState(() {
+        _hostCtrl.text = uri.host;
+        if (uri.port > 0) _portCtrl.text = uri.port.toString();
+      });
+      _saveAndPair();
+      return;
     }
     if (mounted) {
       setState(() {

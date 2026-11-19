@@ -11,6 +11,8 @@ class ScannerScreen extends StatefulWidget {
   final VoidCallback? onOpenPos;
   final VoidCallback? onOpenCatalog;
   final VoidCallback? onOpenPairing;
+  final VoidCallback? onOpenSalesHistory;
+  final VoidCallback? onOpenProviderBill;
 
   const ScannerScreen({
     super.key,
@@ -20,6 +22,8 @@ class ScannerScreen extends StatefulWidget {
     this.onOpenPos,
     this.onOpenCatalog,
     this.onOpenPairing,
+    this.onOpenSalesHistory,
+    this.onOpenProviderBill,
   });
 
   @override
@@ -492,7 +496,7 @@ class ScannerScreenState extends State<ScannerScreen> {
                   inkPrimary: inkPrimary,
                   inkMuted: inkMuted,
                   isMonetary: true,
-                  onTap: widget.onOpenPos,
+                  onTap: widget.onOpenSalesHistory ?? widget.onOpenPos,
                 ),
               ),
             ],
@@ -515,6 +519,20 @@ class ScannerScreenState extends State<ScannerScreen> {
             spacing: 8,
             runSpacing: 8,
             children: [
+              ActionChip(
+                avatar: const Icon(Icons.document_scanner_outlined, size: 16, color: Color(0xFF10B981)),
+                label: const Text('Facture Fournisseur'),
+                backgroundColor: subtleBg,
+                side: BorderSide(color: borderCol),
+                onPressed: widget.onOpenProviderBill,
+              ),
+              ActionChip(
+                avatar: const Icon(Icons.receipt_long_outlined, size: 16, color: Color(0xFF6D28D9)),
+                label: const Text('Historique Ventes'),
+                backgroundColor: subtleBg,
+                side: BorderSide(color: borderCol),
+                onPressed: widget.onOpenSalesHistory,
+              ),
               ActionChip(
                 avatar: const Icon(Icons.add, size: 16, color: Color(0xFF1C61E7)),
                 label: const Text('Nouveau Produit'),

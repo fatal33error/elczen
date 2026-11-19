@@ -162,6 +162,231 @@ async function callAiProductEnrichment(
   }
 }
 
+function parseBillFallback(raw: string): Record<string, any> {
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const items: Array<Record<string, any>> = [];
+  let providerName = 'Fournisseur Réception';
+  let invoiceNumber = `BL-${Date.now().toString().slice(-6)}`;
+  let invoiceDate = new Date().toISOString().slice(0, 10);
+  let totalAmount = 0;
+
+  for (const line of lines) {
+    if (/fournisseur|soci[eé]t[eé]|distribut/i.test(line)) {
+      providerName = line.replace(/.*[:\-]/, '').trim() || providerName;
+    }
+    if (/facture|bl|bon|n[°o]/i.test(line) && /\d+/.test(line)) {
+      const match = line.match(/(?:facture|bl|bon|ref|n[°o])\s*[:#\s]?\s*([A-Za-z0-9\-_]+)/i);
+      if (match) invoiceNumber = match[1];
+    }
+    if (/\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}/.test(line)) {
+      const dMatch = line.match(/\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}/);
+      if (dMatch) invoiceDate = dMatch[0];
+    }
+    const priceMatch = line.match(/(\d+(?:[.,]\d{1,2})?)\s*(?:mad|dh|dhs)?$/i);
+    const qtyMatch = line.match(/\b(\d+)\s*(?:x|u|pcs|unites)?\b/i);
+    if (priceMatch && line.length > 8 && !/total|sous-total|net|tva/i.test(line)) {
+      const price = parseFloat(priceMatch[1].replace(',', '.'));
+      const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+      const cleanName = line.replace(priceMatch[0], '').replace(qtyMatch ? qtyMatch[0] : '', '').trim();
+      if (cleanName.length > 2 && price > 0) {
+        items.push({
+          product_name: cleanName,
+          quantity: qty,
+          unit_cost: Math.round((price / qty) * 100) / 100,
+          total_price: price,
+        });
+      }
+    }
+    if (/total|net\s*a\s*payer/i.test(line)) {
+      const tMatch = line.match(/(\d+(?:[.,]\d{1,2})?)/);
+      if (tMatch) totalAmount = parseFloat(tMatch[1].replace(',', '.'));
+    }
+  }
+
+  return {
+    provider_name: providerName,
+    invoice_number: invoiceNumber,
+    invoice_date: invoiceDate,
+    total_amount: totalAmount || items.reduce((acc, it) => acc + (it.total_price || 0), 0),
+    items: items.length > 0 ? items : [
+      {
+        product_name: 'Réception Matériel Électroménager',
+        quantity: 1,
+        unit_cost: 1500,
+        total_price: 1500,
+      },
+    ],
+  };
+}
+
+async function parseProviderBillWithAi(
+  providerRaw: string,
+  apiKey: string,
+  imageBase64?: string,
+  rawText?: string,
+  mimeType: string = 'image/jpeg'
+): Promise<{ data: Record<string, any> | null; provider: string; error?: string }> {
+  const provider = (providerRaw || 'gemini').toLowerCase();
+  const key = String(apiKey || '').trim();
+  if (!key) {
+    return { data: parseBillFallback(rawText || ''), provider: 'offline_heuristic' };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 22000);
+    let contentText = '';
+
+    const billPrompt = `Tu es un expert comptable et gestionnaire de stock pour magasins d'électroménager et high-tech au Maroc. Analyse cette facture ou ce bon de livraison fournisseur (en français ou en arabe).
+Extrais les informations de la facture sous la forme d'un objet JSON strict valide sans texte superflu:
+{
+  "provider_name": "Nom de la société fournisseur ou marque émettrice",
+  "invoice_number": "Numéro de la facture ou référence BL (ex: FAC-2026-9812, BL-4029)",
+  "invoice_date": "Date de facturation (YYYY-MM-DD)",
+  "total_amount": 0.0,
+  "paid_amount": 0.0,
+  "notes": "Remarques éventuelles",
+  "items": [
+    {
+      "product_name": "Désignation complète du produit",
+      "brand": "Marque si identifiable (Samsung, LG, Bosch, etc.)",
+      "model_number": "Numéro de modèle ou référence",
+      "quantity": 1,
+      "unit_cost": 0.0,
+      "total_price": 0.0,
+      "barcode": "Code-barres EAN si présent sur la ligne"
+    }
+  ]
+}
+Assure-toi que les montants sont des nombres décimaux en Dirhams marocains (MAD).`;
+
+    if (imageBase64 && provider === 'gemini') {
+      const cleanB64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '').trim();
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: mimeType || 'image/jpeg',
+                      data: cleanB64,
+                    },
+                  },
+                  { text: billPrompt },
+                ],
+              },
+            ],
+            generationConfig: { responseMimeType: 'application/json', temperature: 0.1 },
+          }),
+        }
+      );
+      clearTimeout(timer);
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        return { data: parseBillFallback(rawText || ''), provider: 'gemini', error: `Gemini HTTP ${resp.status}: ${errBody.slice(0, 100)}` };
+      }
+      const json = (await resp.json()) as any;
+      contentText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } else if (imageBase64 && provider === 'openai') {
+      const fullDataUri = imageBase64.startsWith('data:') ? imageBase64 : `data:${mimeType || 'image/jpeg'};base64,${imageBase64}`;
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: billPrompt },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Analyse cette image de facture fournisseur:' },
+                { type: 'image_url', image_url: { url: fullDataUri } },
+              ],
+            },
+          ],
+        }),
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        return { data: parseBillFallback(rawText || ''), provider: 'openai', error: `OpenAI HTTP ${resp.status}: ${errBody.slice(0, 100)}` };
+      }
+      const json = (await resp.json()) as any;
+      contentText = json?.choices?.[0]?.message?.content || '';
+    } else {
+      const textToAnalyze = rawText || 'Facture fournisseur électroménager';
+      if (provider === 'deepseek' || provider === 'openai') {
+        const endpoint =
+          provider === 'deepseek'
+            ? 'https://api.deepseek.com/chat/completions'
+            : 'https://api.openai.com/v1/chat/completions';
+        const model = provider === 'deepseek' ? 'deepseek-chat' : 'gpt-4o-mini';
+        const resp = await fetch(endpoint, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.1,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: billPrompt },
+              { role: 'user', content: textToAnalyze },
+            ],
+          }),
+        });
+        clearTimeout(timer);
+        if (!resp.ok) {
+          const errBody = await resp.text().catch(() => '');
+          return { data: parseBillFallback(textToAnalyze), provider, error: `${provider.toUpperCase()} HTTP ${resp.status}: ${errBody.slice(0, 100)}` };
+        }
+        const json = (await resp.json()) as any;
+        contentText = json?.choices?.[0]?.message?.content || '';
+      } else {
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+          {
+            method: 'POST',
+            signal: controller.signal,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: `${billPrompt}\n\nTexte de la facture:\n${textToAnalyze}` }] }],
+              generationConfig: { responseMimeType: 'application/json', temperature: 0.1 },
+            }),
+          }
+        );
+        clearTimeout(timer);
+        if (!resp.ok) {
+          return { data: parseBillFallback(textToAnalyze), provider: 'gemini' };
+        }
+        const json = (await resp.json()) as any;
+        contentText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      }
+    }
+
+    const parsed = parseJsonFromAiText(contentText);
+    if (!parsed) return { data: parseBillFallback(rawText || ''), provider };
+    return { data: parsed, provider };
+  } catch (err: any) {
+    return { data: parseBillFallback(rawText || ''), provider: 'offline_heuristic', error: err?.message };
+  }
+}
+
 async function fetchJsonWithTimeout(url: string, ms = 4500): Promise<any | null> {
   try {
     const controller = new AbortController();
@@ -1339,14 +1564,26 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/purchases' && method === 'POST') {
-      const { supplier_id, invoice_number, items, paid_amount, notes } = await readJsonBody(req);
+      const { supplier_id, supplier_name, invoice_number, items, paid_amount, notes } = await readJsonBody(req);
       if (!Array.isArray(items) || items.length === 0) {
         sendJson(res, 400, { error: 'Purchase must include at least one item' });
         return;
       }
 
-      const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(Number(supplier_id)) as Record<string, any> | undefined;
-      const supplierName = supplier ? `${supplier.company || supplier.name}` : 'Fournisseur Direct';
+      let finalSuppId = Number(supplier_id) || 0;
+      if (!finalSuppId && supplier_name) {
+        const found = db.prepare('SELECT id FROM suppliers WHERE name LIKE ? OR company LIKE ? LIMIT 1').get(`%${supplier_name}%`, `%${supplier_name}%`) as { id: number } | undefined;
+        if (found) {
+          finalSuppId = found.id;
+        } else {
+          const insSupp = db.prepare('INSERT INTO suppliers (name, company) VALUES (?, ?)').run(supplier_name, supplier_name);
+          finalSuppId = Number(insSupp.lastInsertRowid);
+        }
+      }
+      if (!finalSuppId) finalSuppId = 1;
+
+      const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(finalSuppId) as Record<string, any> | undefined;
+      const supplierName = supplier ? `${supplier.company || supplier.name}` : (supplier_name || 'Fournisseur Direct');
 
       let totalAmount = 0;
       for (const item of items) {
@@ -1359,12 +1596,39 @@ const server = http.createServer(async (req, res) => {
       const purchaseRes = db.prepare(`
         INSERT INTO purchases (invoice_number, supplier_id, total_amount, paid_amount, remaining_owed, notes)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run(invRef, Number(supplier_id) || 1, totalAmount, paid, remainingOwed, notes || '');
+      `).run(invRef, finalSuppId, totalAmount, paid, remainingOwed, notes || '');
 
       const purchaseId = Number(purchaseRes.lastInsertRowid);
 
       for (const item of items) {
-        const prod = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(item.product_id)) as Record<string, any>;
+        let prod = item.product_id ? (db.prepare('SELECT * FROM products WHERE id = ?').get(Number(item.product_id)) as Record<string, any>) : null;
+        if (!prod && item.product_name) {
+          const newBarcode = item.barcode || `EAN-${Date.now().toString().slice(-8)}`;
+          const insRes = db.prepare(`
+            INSERT INTO products (
+              barcode, sku, model_number, brand, category,
+              name_fr, name_ar, name_en,
+              retail_price, wholesale_price, min_selling_price,
+              current_cost_price, last_cost_price, stock_quantity,
+              min_stock_alert, warranty_months, has_serial, woo_sync_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 2, 12, 0, 'pending')
+          `).run(
+            newBarcode,
+            item.sku || newBarcode,
+            item.model_number || '',
+            item.brand || 'Générique',
+            item.category || 'Gros Électroménager',
+            item.product_name,
+            item.name_ar || item.product_name,
+            item.name_en || item.product_name,
+            Number(item.new_retail_price) || Math.round(Number(item.unit_cost) * 1.25),
+            Number(item.new_wholesale_price) || Math.round(Number(item.unit_cost) * 1.15),
+            Number(item.unit_cost) || 0,
+            Number(item.unit_cost) || 0,
+            Number(item.unit_cost) || 0
+          );
+          prod = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(insRes.lastInsertRowid)) as Record<string, any>;
+        }
         if (!prod) continue;
 
         const qty = Number(item.quantity) || 1;
@@ -1732,6 +1996,87 @@ const server = http.createServer(async (req, res) => {
         description_fr: `Appareil ${cleanBrand} réf. ${cleanModel}, classe énergétique A+++, motorisation Inverter silencieuse et garantie officielle 24 mois.`,
         description_ar: `جهاز ${cleanBrand} موديل ${cleanModel} بتقنية الإنفرتر الاقتصادية وضمان رسمي لمدة 24 شهراً.`,
         description_en: `${cleanBrand} ${cleanModel} featuring A+++ Inverter efficiency and 24-month store warranty.`,
+      });
+      return;
+    }
+
+    if (pathname === '/api/ai/scan-bill' && method === 'POST') {
+      const { imageBase64, rawText, mimeType } = await readJsonBody(req);
+      const settings = getSettingsMap();
+      const aiRes = await parseProviderBillWithAi(
+        settings.ai_provider || 'gemini',
+        settings.ai_api_key || '',
+        imageBase64,
+        rawText,
+        mimeType || 'image/jpeg'
+      );
+
+      const parsed = aiRes.data || {};
+      const providerName = String(parsed.provider_name || 'Fournisseur Réception').trim();
+
+      let matchedSupplier: Record<string, any> | undefined;
+      if (providerName) {
+        matchedSupplier = db.prepare(`
+          SELECT id, name, company, phone FROM suppliers
+          WHERE name LIKE ? OR company LIKE ?
+          LIMIT 1
+        `).get(`%${providerName}%`, `%${providerName}%`) as Record<string, any> | undefined;
+      }
+
+      const allSuppliers = db.prepare('SELECT id, name, company FROM suppliers ORDER BY id ASC').all();
+
+      const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+      const enrichedItems = rawItems.map((it: any) => {
+        const prodName = String(it.product_name || '').trim();
+        const barcode = String(it.barcode || '').trim();
+        const model = String(it.model_number || '').trim();
+
+        let match: Record<string, any> | undefined;
+        if (barcode) {
+          match = db.prepare('SELECT id, name_fr, barcode, sku, retail_price, wholesale_price, current_cost_price, stock_quantity FROM products WHERE barcode = ?').get(barcode) as Record<string, any> | undefined;
+        }
+        if (!match && model) {
+          match = db.prepare('SELECT id, name_fr, barcode, sku, retail_price, wholesale_price, current_cost_price, stock_quantity FROM products WHERE model_number LIKE ? LIMIT 1').get(`%${model}%`) as Record<string, any> | undefined;
+        }
+        if (!match && prodName) {
+          match = db.prepare('SELECT id, name_fr, barcode, sku, retail_price, wholesale_price, current_cost_price, stock_quantity FROM products WHERE name_fr LIKE ? LIMIT 1').get(`%${prodName.slice(0, 20)}%`) as Record<string, any> | undefined;
+        }
+
+        const unitCost = Number(it.unit_cost) || 0;
+        const qty = Math.max(1, Number(it.quantity) || 1);
+        const retailPrice = match ? Number(match.retail_price) : Math.round(unitCost * 1.25);
+        const wholesalePrice = match ? Number(match.wholesale_price) : Math.round(unitCost * 1.15);
+
+        return {
+          product_name: prodName || (match ? match.name_fr : 'Article sans nom'),
+          brand: it.brand || '',
+          model_number: model,
+          barcode: barcode || (match ? match.barcode : ''),
+          quantity: qty,
+          unit_cost: unitCost,
+          total_price: Number(it.total_price) || (qty * unitCost),
+          product_id: match ? match.id : null,
+          matched_product_name: match ? match.name_fr : null,
+          current_stock: match ? match.stock_quantity : 0,
+          current_cost_price: match ? match.current_cost_price : null,
+          new_retail_price: retailPrice,
+          new_wholesale_price: wholesalePrice,
+          is_new_product: !match,
+        };
+      });
+
+      sendJson(res, 200, {
+        success: true,
+        provider: aiRes.provider,
+        provider_name: providerName,
+        supplier_id: matchedSupplier ? matchedSupplier.id : (allSuppliers[0]?.id || 1),
+        matched_supplier: matchedSupplier || null,
+        available_suppliers: allSuppliers,
+        invoice_number: String(parsed.invoice_number || `BL-${Date.now().toString().slice(-6)}`),
+        invoice_date: String(parsed.invoice_date || new Date().toISOString().slice(0, 10)),
+        total_amount: Number(parsed.total_amount) || enrichedItems.reduce((acc: number, it: any) => acc + (it.total_price || 0), 0),
+        items: enrichedItems,
+        error: aiRes.error,
       });
       return;
     }
