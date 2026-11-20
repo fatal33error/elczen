@@ -410,16 +410,140 @@ Return ONLY valid JSON without markdown code fences.`;
 
 let geminiImageQuotaBlockedUntil = 0;
 
+function normalizeProductImages(row: Record<string, any> | undefined | null): string[] {
+  if (!row) return [];
+  const out: string[] = [];
+  try {
+    const parsed = typeof row.images_json === 'string' ? JSON.parse(row.images_json || '[]') : row.images_json;
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        const s = String(item || '').trim();
+        if (s && !out.includes(s)) out.push(s);
+      }
+    }
+  } catch {}
+  const legacyUrl = String(row.image_url || '').trim();
+  if (legacyUrl && !out.includes(legacyUrl)) {
+    out.unshift(legacyUrl);
+  }
+  return out;
+}
+
+function attachNormalizedImages<T extends Record<string, any>>(row: T): T & { images: string[]; image_url: string } {
+  const imgs = normalizeProductImages(row);
+  return {
+    ...row,
+    images: imgs,
+    image_url: imgs[0] || '',
+  };
+}
+
+function saveWooMediaMapping(localUrl: string, entry: { public_url?: string; wp_media_id?: number; source_url?: string; base_url?: string }) {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'woo_media_map_json'").get() as { value: string } | undefined;
+    const map = row?.value ? JSON.parse(row.value) : {};
+    map[localUrl] = { ...(map[localUrl] || {}), ...entry, updated_at: new Date().toISOString() };
+    db.prepare(`
+      INSERT INTO settings (key, value) VALUES ('woo_media_map_json', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(JSON.stringify(map));
+  } catch {}
+}
+
+async function searchWebProductImages(query: string): Promise<Array<{ url: string; thumb: string; title: string }>> {
+  const cleanQ = String(query || '').trim();
+  if (!cleanQ) return [];
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9000);
+    const searchUrl = `https://www.bing.com/images/async?q=${encodeURIComponent(cleanQ)}&first=0&count=18&adlt=Strict`;
+    const resp = await fetch(searchUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+      },
+    });
+    clearTimeout(timer);
+    if (!resp.ok) return [];
+    const html = await resp.text();
+    const results: Array<{ url: string; thumb: string; title: string }> = [];
+    const seen = new Set<string>();
+    const regex = /murl&quot;:&quot;(https?:\/\/.+?)&quot;,&quot;turl&quot;:&quot;(https?:\/\/.+?)&quot;/g;
+    for (const m of html.matchAll(regex)) {
+      const imgUrl = m[1].replace(/&amp;/g, '&');
+      const thumbUrl = m[2].replace(/&amp;/g, '&');
+      if (!imgUrl || seen.has(imgUrl)) continue;
+      seen.add(imgUrl);
+      const afterSlice = html.slice(m.index || 0, (m.index || 0) + 600);
+      const titleMatch = afterSlice.match(/&quot;t&quot;:&quot;(.+?)&quot;/);
+      const title = titleMatch ? titleMatch[1].replace(/&amp;/g, '&') : cleanQ;
+      results.push({ url: imgUrl, thumb: thumbUrl, title });
+      if (results.length >= 12) break;
+    }
+    return results;
+  } catch (err) {
+    console.error('Web image search error:', err);
+    return [];
+  }
+}
+
+async function downloadWebProductImage(
+  url: string,
+  thumb: string,
+  uploadDir: string
+): Promise<{ image_url?: string; public_url?: string; error?: string }> {
+  const primary = String(url || '').trim();
+  const fallback = String(thumb || '').trim();
+  if (!primary && !fallback) return { error: 'URL image manquante' };
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+  const candidates = [primary, fallback].filter((u) => /^https?:\/\//i.test(u));
+  for (const candidate of candidates) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8500);
+      const resp = await fetch(candidate, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'image/webp,image/png,image/jpeg,*/*;q=0.8',
+        },
+      });
+      clearTimeout(timer);
+      if (!resp.ok) continue;
+      const cType = String(resp.headers.get('content-type') || 'image/jpeg').toLowerCase();
+      if (!cType.includes('image') && !cType.includes('octet-stream')) continue;
+      const arr = await resp.arrayBuffer();
+      const buf = Buffer.from(arr);
+      if (buf.length < 1500) continue;
+      const ext = cType.includes('png') ? '.png' : cType.includes('webp') ? '.webp' : '.jpg';
+      const fileName = `web-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}${ext}`;
+      fs.writeFileSync(path.join(uploadDir, fileName), buf);
+      const localUrl = `/uploads/products/${fileName}`;
+      const publicUrl = primary && /^https?:\/\//i.test(primary) ? primary : candidate;
+      saveWooMediaMapping(localUrl, { public_url: publicUrl });
+      return { image_url: localUrl, public_url: publicUrl };
+    } catch {}
+  }
+  return { error: 'Impossible de télécharger cette image distante (serveur protégé ou hors ligne).' };
+}
+
 async function callGenerateProProductPhoto(
   providerRaw: string,
   apiKey: string,
   images: Array<{ imageBase64: string; mimeType?: string }>,
   uploadDir: string,
   productName = '',
-  brand = ''
+  brand = '',
+  modeRaw = 'clean_crop'
 ): Promise<{ imageUrl?: string; method?: string; best_index?: number; box_2d?: number[]; error?: string }> {
   const provider = (providerRaw || 'gemini').toLowerCase();
   const key = String(apiKey || '').trim();
+  const mode = String(modeRaw || 'clean_crop').toLowerCase();
   if (!Array.isArray(images) || images.length === 0) {
     return { error: 'Veuillez fournir au moins une photo du produit ou de sa boîte.' };
   }
@@ -428,56 +552,133 @@ async function callGenerateProProductPhoto(
     fs.mkdirSync(uploadDir, { recursive: true });
   }
 
-  const studioPrompt = `Extract ONLY the main electronics/appliance product shown in these photos (${brand} ${productName}). Remove the cardboard box, shelves, background clutter, price stickers, and text labels. Render a clean, high-resolution, professional e-commerce studio photograph centered on a pure white (#FFFFFF) background with realistic soft ground shadow and sharp product details.`;
-
-  // Tier 1: Try native AI Image Generation (skip for 10 min if Gemini free-tier quota is 0)
-  if (key && provider === 'gemini' && Date.now() > geminiImageQuotaBlockedUntil) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 16000);
-      const parts: any[] = [{ text: studioPrompt }];
-      const firstImg = images[0];
-      const cleanB64 = String(firstImg?.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
-      if (cleanB64) parts.push({ inline_data: { mime_type: firstImg.mimeType || 'image/jpeg', data: cleanB64 } });
-      const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`,
-        {
+  // Generative AI 3D Studio Render Mode
+  if (mode === 'ai_render') {
+    const studioPrompt = `Generate a crisp, clean, ultra-realistic 3D commercial e-commerce product photograph of ONLY the appliance (${brand} ${productName}) shown in the reference photo. Front-facing 3/4 studio angle on a pure white (#FFFFFF) seamless infinity backdrop, soft natural studio contact shadow, sharp metal/glass reflections, NO cardboard box, NO text labels, NO background clutter.`;
+    if (key && provider === 'openai') {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 28000);
+        const resp = await fetch('https://api.openai.com/v1/images/generations', {
           method: 'POST',
           signal: controller.signal,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts }],
-            generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
-          }),
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+          body: JSON.stringify({ model: 'gpt-image-1', prompt: studioPrompt, size: '1024x1024', n: 1 }),
+        });
+        clearTimeout(timer);
+        if (resp.ok) {
+          const j = (await resp.json()) as any;
+          const b64 = j?.data?.[0]?.b64_json;
+          if (b64) {
+            const outFile = `pro-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}.png`;
+            fs.writeFileSync(path.join(uploadDir, outFile), Buffer.from(b64, 'base64'));
+            return { imageUrl: `/uploads/products/${outFile}`, method: 'ai_studio_gen' };
+          }
         }
-      );
-      clearTimeout(timer);
-      if (resp.status === 429) {
-        geminiImageQuotaBlockedUntil = Date.now() + 10 * 60 * 1000;
-      } else if (resp.ok) {
-        const json = (await resp.json()) as any;
-        const outParts = json?.candidates?.[0]?.content?.parts || [];
-        const imgPart = outParts.find((p: any) => p.inlineData?.data || p.inline_data?.data);
-        const outData = imgPart?.inlineData || imgPart?.inline_data;
-        if (outData?.data) {
-          const outMime = String(outData.mimeType || 'image/png').toLowerCase();
-          const ext = outMime.includes('png') ? '.png' : '.jpg';
-          const outFile = `pro-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}${ext}`;
-          fs.writeFileSync(path.join(uploadDir, outFile), Buffer.from(outData.data, 'base64'));
-          return { imageUrl: `/uploads/products/${outFile}`, method: 'ai_studio_gen' };
+      } catch {}
+    }
+    if (key && provider === 'gemini' && Date.now() > geminiImageQuotaBlockedUntil) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 16000);
+        const parts: any[] = [{ text: studioPrompt }];
+        const firstImg = images[0];
+        const cleanB64 = String(firstImg?.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+        if (cleanB64) parts.push({ inline_data: { mime_type: firstImg.mimeType || 'image/jpeg', data: cleanB64 } });
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent?key=${encodeURIComponent(key)}`,
+          {
+            method: 'POST',
+            signal: controller.signal,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts }],
+              generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+            }),
+          }
+        );
+        clearTimeout(timer);
+        if (resp.status === 429 || resp.status === 404) {
+          geminiImageQuotaBlockedUntil = Date.now() + 10 * 60 * 1000;
+        } else if (resp.ok) {
+          const json = (await resp.json()) as any;
+          const outParts = json?.candidates?.[0]?.content?.parts || [];
+          const imgPart = outParts.find((p: any) => p.inlineData?.data || p.inline_data?.data);
+          const outData = imgPart?.inlineData || imgPart?.inline_data;
+          if (outData?.data) {
+            const outMime = String(outData.mimeType || 'image/png').toLowerCase();
+            const ext = outMime.includes('png') ? '.png' : '.jpg';
+            const outFile = `pro-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}${ext}`;
+            fs.writeFileSync(path.join(uploadDir, outFile), Buffer.from(outData.data, 'base64'));
+            return { imageUrl: `/uploads/products/${outFile}`, method: 'ai_studio_gen' };
+          }
+        }
+      } catch {}
+    }
+
+    // Free-tier Vision prompt -> Pollinations studio synthesis fallback
+    try {
+      let renderPrompt = `commercial e-commerce studio product photograph of ${brand} ${productName}, home electronics appliance isolated on pure solid white studio background, soft contact shadow, sharp details, clean lighting`;
+      if (key && provider === 'gemini') {
+        try {
+          const c = new AbortController();
+          const t = setTimeout(() => c.abort(), 14000);
+          const parts: any[] = [
+            {
+              text: `Inspect these photos (${brand} ${productName}) and write ONE concise English prompt (max 35 words) describing the physical appliance's exact color, finish, controls, glass door/display, and style for a pure white background studio product render. Return ONLY strict JSON: {"prompt": "..."}`,
+            },
+          ];
+          const first = images[0];
+          const cleanB64 = String(first?.imageBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+          if (cleanB64) parts.push({ inline_data: { mime_type: first.mimeType || 'image/jpeg', data: cleanB64 } });
+          const r = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${encodeURIComponent(key)}`,
+            {
+              method: 'POST',
+              signal: c.signal,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ parts }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
+            }
+          );
+          clearTimeout(t);
+          if (r.ok) {
+            const j = (await r.json()) as any;
+            const parsed = parseJsonFromAiText(j?.candidates?.[0]?.content?.parts?.[0]?.text || '');
+            if (parsed?.prompt) {
+              renderPrompt = `${parsed.prompt}, isolated on pure solid white studio background, e-commerce catalog photography, soft ground shadow`;
+            }
+          }
+        } catch {}
+      }
+
+      const polController = new AbortController();
+      const polTimer = setTimeout(() => polController.abort(), 18000);
+      const polUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(renderPrompt)}?width=1000&height=1000&nologo=true&seed=${Date.now() % 99999}`;
+      const polResp = await fetch(polUrl, { signal: polController.signal, headers: { 'User-Agent': 'ELECTROZEN-POS/1.0' } });
+      clearTimeout(polTimer);
+      if (polResp.ok) {
+        const cType = String(polResp.headers.get('content-type') || '').toLowerCase();
+        if (cType.includes('image')) {
+          const buf = Buffer.from(await polResp.arrayBuffer());
+          if (buf.length > 4000) {
+            const outFile = `pro-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}.jpg`;
+            fs.writeFileSync(path.join(uploadDir, outFile), buf);
+            return { imageUrl: `/uploads/products/${outFile}`, method: 'ai_studio_gen' };
+          }
         }
       }
     } catch {}
   }
 
-  // Tier 2: Vision Bounding-Box Localization + Automated Studio White-Background Cutout Engine
+  // Vision Bounding-Box Localization + Multi-Mode Studio Processor (clean_crop | white_cutout | original_framed)
   let bestIdx = 0;
   let box: [number, number, number, number] = [0, 0, 1000, 1000];
+  const psMode = mode === 'white_cutout' ? 'white_cutout' : mode === 'original_framed' ? 'original_framed' : 'clean_crop';
 
-  if (key && (provider === 'gemini' || provider === 'openai')) {
+  if (psMode !== 'original_framed' && key && (provider === 'gemini' || provider === 'openai')) {
     try {
       const bboxPrompt =
-        'Inspect these photos of a product or its retail box. Choose the image index (0-based) that has the CLEANEST, most unobstructed product illustration/view (prefer a view surrounded by a uniform white/plain background rather than split dark/green backgrounds if available). Return ONLY strict JSON with a tight normalized [ymin, xmin, ymax, xmax] bounding box (0-1000) tightly framing ONLY the physical appliance itself (NOT the outer cardboard box, NOT text/icons around it): {"best_index": 0, "box_2d": [ymin, xmin, ymax, xmax]}';
+        'Inspect these photos of a product or its retail box. Choose the image index (0-based) that shows the physical appliance illustration/body most clearly from the front or 3/4 view. Return ONLY strict JSON with a tight normalized [ymin, xmin, ymax, xmax] bounding box (0-1000) tightly framing ONLY the physical appliance itself (exclude outer cardboard box borders, handles, text, logos, tables, and icons outside the appliance): {"best_index": 0, "box_2d": [ymin, xmin, ymax, xmax]}';
 
       let bboxText = '';
       const controller = new AbortController();
@@ -569,11 +770,13 @@ async function callGenerateProProductPhoto(
           String(Math.round(box[2])),
           '-XMax',
           String(Math.round(box[3])),
+          '-Mode',
+          psMode,
         ],
         { timeout: 15000 }
       );
       if (fs.existsSync(outPath)) {
-        return { imageUrl: `/uploads/products/${outFile}`, method: 'vision_studio_cutout', best_index: bestIdx, box_2d: box };
+        return { imageUrl: `/uploads/products/${outFile}`, method: `studio_${psMode}`, best_index: bestIdx, box_2d: box };
       }
     }
     // Non-Windows fallback: save uploaded image
@@ -610,19 +813,21 @@ async function lookupBarcodeOnInternet(barcode: string) {
     .prepare('SELECT * FROM products WHERE barcode = ? OR sku = ? OR model_number = ?')
     .get(clean, clean, clean) as Record<string, any> | undefined;
   if (existing) {
+    const normExisting = attachNormalizedImages(existing);
     return {
       found: true,
       existsLocally: true,
       source: 'local',
-      product: existing,
-      brand: existing.brand,
-      model_number: existing.model_number,
-      category: existing.category,
-      name_fr: existing.name_fr,
-      name_ar: existing.name_ar,
-      name_en: existing.name_en,
-      description_fr: existing.description_fr,
-      image_url: existing.image_url,
+      product: normExisting,
+      brand: normExisting.brand,
+      model_number: normExisting.model_number,
+      category: normExisting.category,
+      name_fr: normExisting.name_fr,
+      name_ar: normExisting.name_ar,
+      name_en: normExisting.name_en,
+      description_fr: normExisting.description_fr,
+      image_url: normExisting.image_url,
+      images: normExisting.images,
     };
   }
 
@@ -1006,6 +1211,278 @@ function isAuthorizedApiRequest(req: IncomingMessage): boolean {
     return true;
   }
   return false;
+}
+
+function normalizeWooBaseUrl(raw: string): string {
+  let u = String(raw || '').trim().replace(/\/+$/, '');
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
+  return u;
+}
+
+async function wooFetch(
+  baseUrl: string,
+  ck: string,
+  cs: string,
+  endpointPath: string,
+  options: { method?: string; body?: unknown; timeoutMs?: number } = {}
+): Promise<{ ok: boolean; status: number; data: any; errorMsg: string }> {
+  const sep = endpointPath.includes('?') ? '&' : '?';
+  const fullUrl = `${baseUrl}${endpointPath}${sep}consumer_key=${encodeURIComponent(ck)}&consumer_secret=${encodeURIComponent(cs)}`;
+  const auth = Buffer.from(`${ck}:${cs}`).toString('base64');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 20000);
+  try {
+    const resp = await fetch(fullUrl, {
+      method: options.method || 'GET',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${auth}`,
+        'User-Agent': 'ELECTROZEN-POS/1.0',
+      },
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
+    clearTimeout(timer);
+    const rawText = await resp.text();
+    let data: any = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {}
+    if (!resp.ok) {
+      const msg = data?.message || data?.error || rawText.slice(0, 180) || `HTTP ${resp.status}`;
+      return { ok: false, status: resp.status, data, errorMsg: `HTTP ${resp.status}: ${msg}` };
+    }
+    return { ok: true, status: resp.status, data, errorMsg: '' };
+  } catch (err: any) {
+    clearTimeout(timer);
+    return { ok: false, status: 0, data: null, errorMsg: err?.message || 'Erreur réseau WooCommerce' };
+  }
+}
+
+async function resolveWooImagesForProduct(
+  prod: Record<string, any>,
+  baseUrl: string,
+  settings: Record<string, string>
+): Promise<{ wooImages: Array<Record<string, any>>; localSkipped: number; uploadErrors: string[] }> {
+  const imgs = normalizeProductImages(prod);
+  if (imgs.length === 0) return { wooImages: [], localSkipped: 0, uploadErrors: [] };
+
+  let mediaMap: Record<string, any> = {};
+  try {
+    mediaMap = settings.woo_media_map_json ? JSON.parse(settings.woo_media_map_json) : {};
+  } catch {}
+
+  const wpUser = String(settings.woo_wp_user || '').trim();
+  const wpPass = String(settings.woo_wp_app_password || '').trim();
+  const hasWpAuth = Boolean(wpUser && wpPass);
+  const wooImages: Array<Record<string, any>> = [];
+  let localSkipped = 0;
+  const uploadErrors: string[] = [];
+
+  for (let i = 0; i < imgs.length; i++) {
+    const imgUrl = imgs[i];
+    if (/^https?:\/\//i.test(imgUrl) && !/\/\/(localhost|127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(imgUrl)) {
+      wooImages.push({ src: imgUrl, position: wooImages.length });
+      continue;
+    }
+
+    if (imgUrl.startsWith('/uploads/')) {
+      const cached = mediaMap[imgUrl];
+      if (cached?.wp_media_id && cached?.base_url === baseUrl) {
+        wooImages.push({ id: Number(cached.wp_media_id), position: wooImages.length });
+        continue;
+      }
+
+      if (hasWpAuth) {
+        const localFile = path.join(publicDir, imgUrl.replace(/^\/+/, ''));
+        if (localFile.startsWith(publicDir) && fs.existsSync(localFile)) {
+          try {
+            const ext = path.extname(localFile).toLowerCase();
+            const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+            const fileName = path.basename(localFile);
+            const buf = fs.readFileSync(localFile);
+            const wpAuth = Buffer.from(`${wpUser}:${wpPass}`).toString('base64');
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 25000);
+            const mediaResp = await fetch(`${baseUrl}/wp-json/wp/v2/media`, {
+              method: 'POST',
+              signal: controller.signal,
+              headers: {
+                Authorization: `Basic ${wpAuth}`,
+                'Content-Disposition': `attachment; filename="${fileName}"`,
+                'Content-Type': mime,
+                'User-Agent': 'ELECTROZEN-POS/1.0',
+              },
+              body: buf,
+            });
+            clearTimeout(timer);
+            if (mediaResp.ok) {
+              const mJson = (await mediaResp.json()) as any;
+              if (mJson?.id) {
+                saveWooMediaMapping(imgUrl, {
+                  wp_media_id: Number(mJson.id),
+                  source_url: String(mJson.source_url || ''),
+                  base_url: baseUrl,
+                });
+                wooImages.push({ id: Number(mJson.id), position: wooImages.length });
+                continue;
+              }
+            } else {
+              const errT = await mediaResp.text().catch(() => '');
+              uploadErrors.push(`Media WP ${mediaResp.status}: ${errT.slice(0, 90)}`);
+            }
+          } catch (err: any) {
+            uploadErrors.push(`Upload WP Media: ${err?.message || 'timeout'}`);
+          }
+        }
+      }
+
+      if (cached?.public_url && /^https?:\/\//i.test(cached.public_url)) {
+        wooImages.push({ src: cached.public_url, position: wooImages.length });
+        continue;
+      }
+
+      localSkipped++;
+    }
+  }
+
+  return { wooImages, localSkipped, uploadErrors };
+}
+
+async function ensureWooCategory(
+  categoryName: string,
+  baseUrl: string,
+  ck: string,
+  cs: string,
+  catCache: Map<string, number>
+): Promise<number | null> {
+  const clean = String(categoryName || '').trim();
+  if (!clean) return null;
+  const key = clean.toLowerCase();
+  if (catCache.has(key)) return catCache.get(key) || null;
+
+  const listRes = await wooFetch(baseUrl, ck, cs, `/wp-json/wc/v3/products/categories?search=${encodeURIComponent(clean)}&per_page=20`);
+  if (listRes.ok && Array.isArray(listRes.data)) {
+    const exact = listRes.data.find((c: any) => String(c.name || '').trim().toLowerCase() === key);
+    const match = exact || listRes.data[0];
+    if (match?.id) {
+      catCache.set(key, Number(match.id));
+      return Number(match.id);
+    }
+  }
+  const createRes = await wooFetch(baseUrl, ck, cs, `/wp-json/wc/v3/products/categories`, {
+    method: 'POST',
+    body: { name: clean },
+  });
+  if (createRes.ok && createRes.data?.id) {
+    catCache.set(key, Number(createRes.data.id));
+    return Number(createRes.data.id);
+  }
+  return null;
+}
+
+async function syncSingleProductToWoo(
+  prod: Record<string, any>,
+  settings: Record<string, string>,
+  catCache: Map<string, number>
+): Promise<{ ok: boolean; wooId?: number; localSkippedImages?: number; error?: string }> {
+  const baseUrl = normalizeWooBaseUrl(settings.woo_url || '');
+  const ck = String(settings.woo_consumer_key || '').trim();
+  const cs = String(settings.woo_consumer_secret || '').trim();
+  if (!baseUrl || !ck || !cs) {
+    return { ok: false, error: 'URL ou clés API WooCommerce manquantes.' };
+  }
+
+  const sku = String(prod.sku || prod.barcode || `EZ-${prod.id}`).trim();
+  const { wooImages, localSkipped, uploadErrors } = await resolveWooImagesForProduct(prod, baseUrl, settings);
+  const catId = await ensureWooCategory(String(prod.category || ''), baseUrl, ck, cs, catCache);
+
+  const regularPrice = Number(prod.regular_price) > Number(prod.retail_price) ? Number(prod.regular_price) : Number(prod.retail_price || 0);
+  const salePrice =
+    Number(prod.regular_price) > Number(prod.retail_price) && Number(prod.retail_price) > 0
+      ? String(Number(prod.retail_price))
+      : undefined;
+
+  const shortDesc = `${prod.brand || 'ELECTROZEN'}${prod.model_number ? ' • Modèle: ' + prod.model_number : ''} • Garantie ${prod.warranty_months || 12} mois`;
+  const fullDesc = [
+    prod.description_fr ? `<p>${String(prod.description_fr).replace(/\n/g, '<br/>')}</p>` : '',
+    prod.description_ar ? `<p dir="rtl">${String(prod.description_ar).replace(/\n/g, '<br/>')}</p>` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const payload: Record<string, any> = {
+    name: String(prod.name_fr || prod.name_en || sku),
+    type: 'simple',
+    sku,
+    regular_price: String(regularPrice),
+    description: fullDesc || String(prod.description_fr || prod.name_fr || ''),
+    short_description: shortDesc,
+    manage_stock: true,
+    stock_quantity: Math.max(0, Math.floor(Number(prod.stock_quantity) || 0)),
+    stock_status: Number(prod.stock_quantity) > 0 ? 'instock' : 'outofstock',
+  };
+  if (salePrice) payload.sale_price = salePrice;
+  if (catId) payload.categories = [{ id: catId }];
+  if (wooImages.length > 0) payload.images = wooImages;
+
+  let resWoo: { ok: boolean; status: number; data: any; errorMsg: string } | null = null;
+
+  // Try existing verified woo_id first
+  if (prod.woo_id && Number(prod.woo_id_verified) === 1) {
+    resWoo = await wooFetch(baseUrl, ck, cs, `/wp-json/wc/v3/products/${prod.woo_id}`, {
+      method: 'PUT',
+      body: payload,
+    });
+  }
+
+  // If no verified ID or 404, search by SKU
+  if (!resWoo || (!resWoo.ok && resWoo.status === 404)) {
+    const skuLookup = await wooFetch(baseUrl, ck, cs, `/wp-json/wc/v3/products?sku=${encodeURIComponent(sku)}`);
+    if (skuLookup.ok && Array.isArray(skuLookup.data) && skuLookup.data.length > 0) {
+      const existingWooId = Number(skuLookup.data[0].id);
+      resWoo = await wooFetch(baseUrl, ck, cs, `/wp-json/wc/v3/products/${existingWooId}`, {
+        method: 'PUT',
+        body: payload,
+      });
+    } else if (skuLookup.ok) {
+      resWoo = await wooFetch(baseUrl, ck, cs, `/wp-json/wc/v3/products`, {
+        method: 'POST',
+        body: payload,
+      });
+      if (!resWoo.ok && resWoo.data?.code === 'product_invalid_sku' && resWoo.data?.data?.resource_id) {
+        resWoo = await wooFetch(baseUrl, ck, cs, `/wp-json/wc/v3/products/${resWoo.data.data.resource_id}`, {
+          method: 'PUT',
+          body: payload,
+        });
+      }
+    } else {
+      resWoo = skuLookup;
+    }
+  }
+
+  if (resWoo.ok && resWoo.data?.id) {
+    const realWooId = Number(resWoo.data.id);
+    const noteWarn = uploadErrors.length > 0 ? uploadErrors.join(' | ') : '';
+    db.prepare(`
+      UPDATE products SET
+        woo_id = ?,
+        woo_id_verified = 1,
+        woo_sync_status = 'synced',
+        woo_last_synced = datetime('now'),
+        woo_last_error = ?,
+        permalink = COALESCE(NULLIF(?, ''), permalink)
+      WHERE id = ?
+    `).run(realWooId, noteWarn, String(resWoo.data.permalink || ''), prod.id);
+    return { ok: true, wooId: realWooId, localSkippedImages: localSkipped };
+  }
+
+  const finalErr = resWoo.errorMsg || 'Échec synchronisation WooCommerce';
+  db.prepare(`
+    UPDATE products SET woo_sync_status = 'pending', woo_last_error = ? WHERE id = ?
+  `).run(finalErr, prod.id);
+  return { ok: false, error: finalErr, localSkippedImages: localSkipped };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1461,10 +1938,33 @@ const server = http.createServer(async (req, res) => {
         else serialMap.set(s.product_id, [s.serial_number]);
       }
       const enriched = products.map((p) => ({
-        ...p,
+        ...attachNormalizedImages(p),
         available_serials: serialMap.get(Number(p.id)) || [],
       }));
       sendJson(res, 200, enriched, req);
+      return;
+    }
+
+    if (pathname === '/api/products/image-search' && method === 'GET') {
+      const q = (parsedUrl.searchParams.get('q') || '').trim();
+      if (!q) {
+        sendJson(res, 400, { error: 'Requête de recherche manquante' });
+        return;
+      }
+      const results = await searchWebProductImages(q);
+      sendJson(res, 200, { results }, req);
+      return;
+    }
+
+    if (pathname === '/api/products/download-web-image' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const uploadDir = path.join(publicDir, 'uploads', 'products');
+      const dl = await downloadWebProductImage(String(body.url || ''), String(body.thumb || ''), uploadDir);
+      if (!dl.image_url) {
+        sendJson(res, 400, { error: dl.error || 'Téléchargement impossible' });
+        return;
+      }
+      sendJson(res, 200, { success: true, image_url: dl.image_url, public_url: dl.public_url });
       return;
     }
 
@@ -1477,14 +1977,15 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname.startsWith('/api/products/barcode/') && method === 'GET') {
       const barcode = decodeURIComponent(pathname.replace('/api/products/barcode/', ''));
-      const product = db
+      const productRaw = db
         .prepare('SELECT * FROM products WHERE barcode = ? OR sku = ? OR model_number = ?')
-        .get(barcode, barcode, barcode) as Record<string, unknown> | undefined;
+        .get(barcode, barcode, barcode) as Record<string, any> | undefined;
 
-      if (!product) {
+      if (!productRaw) {
         sendJson(res, 404, { error: 'Product not found', barcode });
         return;
       }
+      const product = attachNormalizedImages(productRaw);
 
       const priceHistory = db
         .prepare('SELECT * FROM price_history WHERE product_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 20')
@@ -1517,6 +2018,8 @@ const server = http.createServer(async (req, res) => {
       const wholesale = Number(p.wholesale_price) || retail;
       const minSelling = Number(p.min_selling_price) || wholesale;
       const stock = Number(p.stock_quantity) || 0;
+      const imgList = normalizeProductImages({ images_json: Array.isArray(p.images) ? p.images : p.images_json, image_url: p.image_url });
+      const primaryImg = imgList[0] || '';
 
       const result = db.prepare(`
         INSERT INTO products (
@@ -1525,8 +2028,8 @@ const server = http.createServer(async (req, res) => {
           description_fr, description_ar, description_en,
           specs_json, retail_price, wholesale_price, min_selling_price,
           current_cost_price, last_cost_price, stock_quantity, min_stock_alert,
-          warranty_months, has_serial, image_url, woo_sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+          warranty_months, has_serial, image_url, images_json, woo_sync_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
       `).run(
         barcode,
         sku,
@@ -1549,7 +2052,8 @@ const server = http.createServer(async (req, res) => {
         Number(p.min_stock_alert) || 2,
         Number(p.warranty_months) || 12,
         p.has_serial ? 1 : 0,
-        p.image_url || ''
+        primaryImg,
+        JSON.stringify(imgList)
       );
 
       const productId = Number(result.lastInsertRowid);
@@ -1583,9 +2087,54 @@ const server = http.createServer(async (req, res) => {
       }
 
       queueWooSync(productId, 'upsert_product', { barcode, retail, stock });
-      const created = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
+      const created = attachNormalizedImages(db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Record<string, any>);
       broadcastEvent('PRODUCT_CREATED', created);
       sendJson(res, 200, created);
+      return;
+    }
+
+    const prodImagesMatch = pathname.match(/^\/api\/products\/(\d+)\/images$/);
+    if (prodImagesMatch && method === 'PUT') {
+      const id = Number(prodImagesMatch[1]);
+      const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Record<string, any> | undefined;
+      if (!existing) {
+        sendJson(res, 404, { error: 'Product not found' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      let imgs = normalizeProductImages(existing);
+      if (Array.isArray(body.images)) {
+        imgs = body.images.map((u: any) => String(u || '').trim()).filter(Boolean);
+      }
+      if (body.add_image) {
+        const addUrl = String(body.add_image).trim();
+        if (addUrl && !imgs.includes(addUrl)) {
+          if (body.make_primary) imgs.unshift(addUrl);
+          else imgs.push(addUrl);
+        }
+      }
+      if (body.remove_image) {
+        const rem = String(body.remove_image).trim();
+        imgs = imgs.filter((u) => u !== rem);
+      }
+      if (body.set_primary) {
+        const prim = String(body.set_primary).trim();
+        if (imgs.includes(prim)) {
+          imgs = [prim, ...imgs.filter((u) => u !== prim)];
+        }
+      }
+      const deduped: string[] = [];
+      for (const u of imgs) {
+        if (u && !deduped.includes(u)) deduped.push(u);
+      }
+      const primaryUrl = deduped[0] || '';
+      db.prepare(`
+        UPDATE products SET image_url = ?, images_json = ?, woo_sync_status = 'pending', updated_at = datetime('now') WHERE id = ?
+      `).run(primaryUrl, JSON.stringify(deduped), id);
+      queueWooSync(id, 'upsert_product', { id, images: deduped });
+      const updated = attachNormalizedImages(db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Record<string, any>);
+      broadcastEvent('PRODUCT_UPDATED', updated);
+      sendJson(res, 200, updated);
       return;
     }
 
@@ -1605,6 +2154,21 @@ const server = http.createServer(async (req, res) => {
       const newRetail = p.retail_price !== undefined ? Number(p.retail_price) : Number(existing.retail_price);
       const newWholesale = p.wholesale_price !== undefined ? Number(p.wholesale_price) : Number(existing.wholesale_price);
 
+      let nextImages = normalizeProductImages(existing);
+      if (Array.isArray(p.images)) {
+        nextImages = normalizeProductImages({ images_json: p.images, image_url: p.image_url });
+      } else if (p.image_url !== undefined) {
+        const u = String(p.image_url || '').trim();
+        if (!u) {
+          nextImages = nextImages.filter((x) => x !== existing.image_url);
+        } else if (!nextImages.includes(u)) {
+          nextImages = [u, ...nextImages];
+        } else {
+          nextImages = [u, ...nextImages.filter((x) => x !== u)];
+        }
+      }
+      const nextPrimaryImg = nextImages[0] || '';
+
       db.prepare(`
         UPDATE products SET
           barcode = ?, sku = ?, model_number = ?, brand = ?, category = ?,
@@ -1612,7 +2176,7 @@ const server = http.createServer(async (req, res) => {
           description_fr = ?, description_ar = ?, description_en = ?,
           retail_price = ?, wholesale_price = ?, min_selling_price = ?,
           current_cost_price = ?, last_cost_price = ?,
-          stock_quantity = ?, min_stock_alert = ?, warranty_months = ?, has_serial = ?, image_url = ?,
+          stock_quantity = ?, min_stock_alert = ?, warranty_months = ?, has_serial = ?, image_url = ?, images_json = ?,
           woo_sync_status = 'pending', updated_at = datetime('now')
         WHERE id = ?
       `).run(
@@ -1636,7 +2200,8 @@ const server = http.createServer(async (req, res) => {
         p.min_stock_alert !== undefined ? Number(p.min_stock_alert) : existing.min_stock_alert,
         p.warranty_months !== undefined ? Number(p.warranty_months) : existing.warranty_months,
         p.has_serial !== undefined ? (p.has_serial ? 1 : 0) : existing.has_serial,
-        p.image_url !== undefined ? String(p.image_url) : existing.image_url,
+        nextPrimaryImg,
+        JSON.stringify(nextImages),
         id
       );
 
@@ -1660,7 +2225,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       queueWooSync(id, 'upsert_product', { id, newRetail, stock: p.stock_quantity ?? existing.stock_quantity });
-      const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+      const updated = attachNormalizedImages(db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Record<string, any>);
       broadcastEvent('PRODUCT_UPDATED', updated);
       sendJson(res, 200, updated);
       return;
@@ -2117,61 +2682,151 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === '/api/woocommerce/test' && method === 'POST') {
+      const body = await readJsonBody(req).catch(() => ({}));
+      const saved = getSettingsMap();
+      const baseUrl = normalizeWooBaseUrl(body.woo_url ?? saved.woo_url ?? '');
+      const ck = String(body.woo_consumer_key ?? saved.woo_consumer_key ?? '').trim();
+      const cs = String(body.woo_consumer_secret ?? saved.woo_consumer_secret ?? '').trim();
+      const wpUser = String(body.woo_wp_user ?? saved.woo_wp_user ?? '').trim();
+      const wpPass = String(body.woo_wp_app_password ?? saved.woo_wp_app_password ?? '').trim();
+
+      if (!baseUrl || !ck || !cs) {
+        sendJson(res, 400, {
+          success: false,
+          wc_connected: false,
+          wp_media_connected: false,
+          error: 'Veuillez saisir l’URL du site et les clés Consumer Key / Secret WooCommerce.',
+        });
+        return;
+      }
+
+      const wcCheck = await wooFetch(baseUrl, ck, cs, '/wp-json/wc/v3/products?per_page=1');
+      let wpMediaConnected = false;
+      let wpMediaMsg = 'Non configuré (les Photos Web s’envoient directement ; les photos locales caméra nécessitent un mot de passe d’application WP).';
+      if (wpUser && wpPass) {
+        try {
+          const wpAuth = Buffer.from(`${wpUser}:${wpPass}`).toString('base64');
+          const c = new AbortController();
+          const t = setTimeout(() => c.abort(), 12000);
+          const wpResp = await fetch(`${baseUrl}/wp-json/wp/v2/users/me`, {
+            signal: c.signal,
+            headers: { Authorization: `Basic ${wpAuth}`, 'User-Agent': 'ELECTROZEN-POS/1.0' },
+          });
+          clearTimeout(t);
+          if (wpResp.ok) {
+            wpMediaConnected = true;
+            wpMediaMsg = 'Bibliothèque Médias WordPress prête (upload automatique des photos PC/Android activé).';
+          } else {
+            wpMediaMsg = `Erreur auth WordPress Médias (HTTP ${wpResp.status}) — vérifiez le Mot de passe d'application.`;
+          }
+        } catch (err: any) {
+          wpMediaMsg = `Médias WP injoignables (${err?.message || 'timeout'})`;
+        }
+      }
+
+      if (!wcCheck.ok) {
+        sendJson(res, 200, {
+          success: false,
+          store_url: baseUrl,
+          wc_connected: false,
+          wp_media_connected: wpMediaConnected,
+          wp_media_message: wpMediaMsg,
+          error: wcCheck.errorMsg,
+        });
+        return;
+      }
+
+      sendJson(res, 200, {
+        success: true,
+        store_url: baseUrl,
+        wc_connected: true,
+        wp_media_connected: wpMediaConnected,
+        wp_media_message: wpMediaMsg,
+        message: `Connexion réussie à ${baseUrl} (API WooCommerce v3 opérationnelle).`,
+      });
+      return;
+    }
+
+    const wooSingleMatch = pathname.match(/^\/api\/woocommerce\/sync-single\/(\d+)$/);
+    if (wooSingleMatch && method === 'POST') {
+      const id = Number(wooSingleMatch[1]);
+      const prod = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Record<string, any> | undefined;
+      if (!prod) {
+        sendJson(res, 404, { error: 'Article introuvable' });
+        return;
+      }
+      const settings = getSettingsMap();
+      const hasRealWoo = Boolean(normalizeWooBaseUrl(settings.woo_url || '') && settings.woo_consumer_key && settings.woo_consumer_secret);
+      if (!hasRealWoo) {
+        sendJson(res, 400, {
+          error: 'Configurez votre Consumer Key & Secret WooCommerce dans Paramètres avant la synchronisation en ligne.',
+        });
+        return;
+      }
+      const catCache = new Map<string, number>();
+      const resSync = await syncSingleProductToWoo(prod, settings, catCache);
+      const updated = attachNormalizedImages(db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Record<string, any>);
+      if (!resSync.ok) {
+        sendJson(res, 400, { success: false, error: resSync.error, product: updated });
+        return;
+      }
+      db.prepare(`UPDATE woo_sync_queue SET status = 'synced', synced_at = datetime('now') WHERE product_id = ? AND status = 'pending'`).run(id);
+      broadcastEvent('WOO_SYNC_COMPLETED', { syncedCount: 1, productId: id });
+      sendJson(res, 200, {
+        success: true,
+        wooId: resSync.wooId,
+        localSkippedImages: resSync.localSkippedImages || 0,
+        product: updated,
+      });
+      return;
+    }
+
     if (pathname === '/api/woocommerce/sync' && method === 'POST') {
       const settings = getSettingsMap();
       const pendingProducts = db.prepare(`SELECT * FROM products WHERE woo_sync_status = 'pending'`).all() as Record<string, any>[];
-      const hasRealWoo = Boolean(settings.woo_url && settings.woo_consumer_key && settings.woo_consumer_secret);
+      const baseUrl = normalizeWooBaseUrl(settings.woo_url || '');
+      const hasRealWoo = Boolean(baseUrl && settings.woo_consumer_key && settings.woo_consumer_secret);
       const syncedIds: number[] = [];
+      const errors: Array<{ id: number; sku: string; name: string; error: string }> = [];
+      let localSkippedImagesTotal = 0;
 
-      for (const prod of pendingProducts) {
-        if (hasRealWoo) {
-          try {
-            const auth = Buffer.from(`${settings.woo_consumer_key}:${settings.woo_consumer_secret}`).toString('base64');
-            const baseUrl = settings.woo_url.replace(/\/$/, '');
-            const endpoint = prod.woo_id
-              ? `${baseUrl}/wp-json/wc/v3/products/${prod.woo_id}`
-              : `${baseUrl}/wp-json/wc/v3/products`;
-            const response = await fetch(endpoint, {
-              method: prod.woo_id ? 'PUT' : 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Basic ${auth}`,
-              },
-              body: JSON.stringify({
-                name: prod.name_fr,
-                sku: prod.sku || prod.barcode,
-                regular_price: String(prod.retail_price),
-                description: prod.description_fr,
-                manage_stock: true,
-                stock_quantity: prod.stock_quantity,
-              }),
+      if (hasRealWoo) {
+        const catCache = new Map<string, number>();
+        for (const prod of pendingProducts) {
+          const r = await syncSingleProductToWoo(prod, settings, catCache);
+          localSkippedImagesTotal += r.localSkippedImages || 0;
+          if (r.ok) {
+            syncedIds.push(Number(prod.id));
+            db.prepare(`UPDATE woo_sync_queue SET status = 'synced', synced_at = datetime('now') WHERE product_id = ? AND status = 'pending'`).run(prod.id);
+          } else {
+            errors.push({
+              id: Number(prod.id),
+              sku: String(prod.sku || prod.barcode || ''),
+              name: String(prod.name_fr || ''),
+              error: r.error || 'Erreur WooCommerce',
             });
-            if (response.ok) {
-              const data = (await response.json()) as { id?: number };
-              db.prepare(`
-                UPDATE products SET woo_id = COALESCE(woo_id, ?), woo_sync_status = 'synced', woo_last_synced = datetime('now') WHERE id = ?
-              `).run(data.id || 2000 + prod.id, prod.id);
-              syncedIds.push(prod.id);
-              continue;
-            }
-          } catch {
-            // Fallback below
           }
         }
-
-        db.prepare(`
-          UPDATE products SET
-            woo_id = COALESCE(woo_id, ?),
-            woo_sync_status = 'synced',
-            woo_last_synced = datetime('now')
-          WHERE id = ?
-        `).run(1100 + Number(prod.id), prod.id);
-        syncedIds.push(Number(prod.id));
+        broadcastEvent('WOO_SYNC_COMPLETED', { syncedCount: syncedIds.length, failedCount: errors.length });
+        sendJson(res, 200, {
+          success: errors.length === 0,
+          syncedCount: syncedIds.length,
+          failedCount: errors.length,
+          localSkippedImagesTotal,
+          errors,
+          mode: 'live_woocommerce',
+        });
+        return;
       }
 
-      db.prepare(`UPDATE woo_sync_queue SET status = 'synced', synced_at = datetime('now') WHERE status = 'pending'`).run();
-      broadcastEvent('WOO_SYNC_COMPLETED', { syncedCount: syncedIds.length });
-      sendJson(res, 200, { success: true, syncedCount: syncedIds.length, mode: hasRealWoo ? 'live_woocommerce' : 'smart_sync' });
+      sendJson(res, 400, {
+        success: false,
+        syncedCount: 0,
+        failedCount: pendingProducts.length,
+        mode: 'unconfigured',
+        error: 'Clés API WooCommerce (Consumer Key / Secret) non configurées. Saisissez vos clés dans Terminaux & WooCommerce puis testez la connexion.',
+      });
       return;
     }
 
@@ -2450,12 +3105,22 @@ Return ONLY strict valid JSON with keys:
           const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
           images = [{ imageBase64: fs.readFileSync(localFile).toString('base64'), mimeType: mime }];
         }
+      } else if (images.length === 0 && /^https?:\/\//i.test(imageUrl)) {
+        try {
+          const r = await fetch(imageUrl, { headers: { 'User-Agent': 'ELECTROZEN-POS/1.0' } });
+          if (r.ok) {
+            const cType = String(r.headers.get('content-type') || 'image/jpeg').split(';')[0];
+            const b = Buffer.from(await r.arrayBuffer());
+            if (b.length > 500) images = [{ imageBase64: b.toString('base64'), mimeType: cType }];
+          }
+        } catch {}
       }
 
       const settings = getSettingsMap();
       const aiProvider = String(body.ai_provider || settings.ai_provider || 'gemini');
       const aiApiKey = String(body.ai_api_key || settings.ai_api_key || '');
       const uploadDir = path.join(publicDir, 'uploads', 'products');
+      const mode = String(body.mode || 'clean_crop');
 
       const result = await callGenerateProProductPhoto(
         aiProvider,
@@ -2463,7 +3128,8 @@ Return ONLY strict valid JSON with keys:
         images,
         uploadDir,
         String(body.product_name || ''),
-        String(body.brand || '')
+        String(body.brand || ''),
+        mode
       );
       if (!result.imageUrl) {
         sendJson(res, 400, { error: result.error || 'Échec de génération de la photo studio.' });

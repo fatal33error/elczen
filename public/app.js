@@ -17,6 +17,8 @@ const ICONS = {
   download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
   quotations: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>`,
   reports: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`,
+  image: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+  search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
 };
 
 const I18N = {
@@ -147,6 +149,24 @@ const state = {
   productPhotoAiLoading: false,
   productProPhotoLoading: false,
   productBoxImages: [],
+  productGalleryImages: [],
+  productStudioMode: 'clean_crop',
+  webImageSearchOpen: false,
+  webImageSearchQuery: '',
+  webImageSearchLoading: false,
+  webImageSearchResults: [],
+  picturesModalProduct: null,
+  picturesModalImages: [],
+  picturesModalStudioMode: 'clean_crop',
+  picturesModalSearchQuery: '',
+  picturesModalSearchLoading: false,
+  picturesModalSearchResults: [],
+  picturesModalBusy: false,
+  wooTestLoading: false,
+  wooTestStatus: null,
+  wooSyncFilter: 'all',
+  wooSyncSearch: '',
+  wooSyncReport: null,
   customerLedger: null,
   freePaymentAmount: '',
   inspectorOpen: false,
@@ -384,11 +404,48 @@ function getFilteredProducts() {
   });
 }
 
+function getProductImages(p) {
+  if (!p) return [];
+  const out = [];
+  if (Array.isArray(p.images)) {
+    p.images.forEach((u) => {
+      const s = String(u || '').trim();
+      if (s && !out.includes(s)) out.push(s);
+    });
+  } else if (typeof p.images_json === 'string' && p.images_json.trim()) {
+    try {
+      const parsed = JSON.parse(p.images_json);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((u) => {
+          const s = String(u || '').trim();
+          if (s && !out.includes(s)) out.push(s);
+        });
+      }
+    } catch {}
+  }
+  const prim = String(p.image_url || '').trim();
+  if (prim && !out.includes(prim)) out.unshift(prim);
+  return out;
+}
+
+function openProductModalWith(ep = null, expanded = false) {
+  state.editingProduct = ep && ep.id ? ep : null;
+  state.prefillProduct = ep && !ep.id ? ep : null;
+  state.productModalExpanded = Boolean(expanded || (ep && ep.id));
+  state.productBoxImages = [];
+  state.productGalleryImages = getProductImages(ep);
+  state.webImageSearchOpen = false;
+  state.webImageSearchResults = [];
+  state.webImageSearchQuery = [ep?.brand, ep?.model_number, ep?.name_fr].filter(Boolean).join(' ').trim();
+  state.productModalOpen = true;
+}
+
 function renderCatalogRows(filteredProducts) {
   const isAdmin = (state.currentUser?.role || 'admin') !== 'caissier';
   return filteredProducts
-    .map(
-      (p) => `
+    .map((p) => {
+      const imgs = getProductImages(p);
+      return `
     <tr>
       <td>
         <div class="mono" style="font-weight:600;color:var(--ink-900);font-size:12px">${p.barcode}</div>
@@ -399,11 +456,14 @@ function renderCatalogRows(filteredProducts) {
       </td>
       <td>
         <div style="display:flex;align-items:center;gap:10px">
-          ${
-            p.image_url
-              ? `<img src="${p.image_url}" class="prod-thumb" alt="" loading="lazy" />`
-              : `<div class="prod-thumb" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10px;color:#64748b">${(p.brand || 'EZ').slice(0, 3)}</div>`
-          }
+          <div class="btn-open-pictures" data-id="${p.id}" style="position:relative;cursor:pointer" title="Gérer les photos (${imgs.length})">
+            ${
+              imgs[0]
+                ? `<img src="${imgs[0]}" class="prod-thumb" alt="" loading="lazy" />`
+                : `<div class="prod-thumb" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10px;color:#64748b">${(p.brand || 'EZ').slice(0, 3)}</div>`
+            }
+            <span style="position:absolute;bottom:-4px;right:-4px;background:${imgs.length > 0 ? '#4f46e5' : '#94a3b8'};color:#fff;font-size:9px;font-weight:800;padding:0 4px;border-radius:999px;border:1px solid #fff">${imgs.length}</span>
+          </div>
           <div>
             <div style="font-weight:600;color:var(--ink-900)">${getProdName(p)}</div>
             <div style="font-size:11px;color:var(--ink-400)">${p.brand} • ${p.category} • Garantie ${p.warranty_months}m</div>
@@ -423,12 +483,14 @@ function renderCatalogRows(filteredProducts) {
         <span class="tag ${p.stock_quantity > p.min_stock_alert ? 'tag-ok' : 'tag-danger'} num">${p.stock_quantity}</span>
       </td>
       <td>
-        <span class="tag ${p.woo_sync_status === 'synced' ? 'tag-ok' : 'tag-warn'}">
+        <span class="tag ${p.woo_sync_status === 'synced' ? 'tag-ok' : 'tag-warn'}" title="${p.woo_last_error || ''}">
           ${p.woo_sync_status === 'synced' ? 'Synchronisé' : 'En file'}
         </span>
+        ${p.woo_last_error ? `<div style="font-size:9.5px;color:#b91c1c;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.woo_last_error}">${p.woo_last_error}</div>` : ''}
       </td>
       <td style="text-align:end">
         <div class="action-group">
+          <button class="btn btn-sm btn-open-pictures" data-id="${p.id}" title="Gérer, ajouter, supprimer ou ordonner les photos">${ICONS.image}<span>${imgs.length}</span></button>
           <button class="btn btn-sm btn-icon btn-print-barcode" data-id="${p.id}" title="Imprimer étiquette code-barres">${ICONS.barcode}</button>
           ${isAdmin ? `<button class="btn btn-sm btn-icon btn-inspect-code" data-barcode="${p.barcode}" title="Historique & S/N">${ICONS.history}</button>` : ''}
           ${isAdmin ? `<button class="btn btn-sm btn-icon btn-edit-prod" data-id="${p.id}" title="Modifier l'article">${ICONS.edit}</button>` : ''}
@@ -436,8 +498,8 @@ function renderCatalogRows(filteredProducts) {
         </div>
       </td>
     </tr>
-  `
-    )
+  `;
+    })
     .join('');
 }
 
@@ -591,6 +653,7 @@ function render() {
 
     ${renderInspectorModal(t)}
     ${renderProductModal(t)}
+    ${renderProductPicturesModal()}
     ${renderPrintableInvoiceModal()}
     ${renderBarcodeLabelModal()}
     ${renderQuickCustomerModal()}
@@ -1989,6 +2052,16 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                 <input name="woo_consumer_secret" type="password" class="input mono" value="${state.settings.woo_consumer_secret || ''}" />
               </div>
             </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div>
+                <label class="field-label">Utilisateur WordPress (Upload Médias)</label>
+                <input name="woo_wp_user" class="input mono" placeholder="Optionnel (ex: admin)" value="${state.settings.woo_wp_user || ''}" />
+              </div>
+              <div>
+                <label class="field-label">Mot de passe d'application WP (Médias)</label>
+                <input name="woo_wp_app_password" type="password" class="input mono" placeholder="Optionnel (pour photos caméra locales)" value="${state.settings.woo_wp_app_password || ''}" />
+              </div>
+            </div>
             <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:10px">
               <div>
                 <label class="field-label">Fournisseur IA</label>
@@ -2003,8 +2076,131 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                 <input name="ai_api_key" type="password" class="input mono" placeholder="sk-... ou AIza..." value="${state.settings.ai_api_key || ''}" />
               </div>
             </div>
-            <button type="submit" class="btn btn-dark" style="justify-content:center">Enregistrer les Paramètres</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="submit" class="btn btn-dark" style="flex:1;justify-content:center">Enregistrer les Paramètres</button>
+              <button type="button" class="btn btn-primary" id="btn-test-woo" ${state.wooTestLoading ? 'disabled' : ''}>
+                ${state.wooTestLoading ? 'Test en cours...' : 'Tester Connexion WooCommerce'}
+              </button>
+            </div>
+            ${
+              state.wooTestStatus
+                ? `<div style="padding:10px 12px;border-radius:8px;font-size:12px;background:${state.wooTestStatus.wc_connected ? 'rgba(57,174,82,0.1)' : 'rgba(226,27,27,0.08)'};border:1px solid ${state.wooTestStatus.wc_connected ? 'rgba(57,174,82,0.35)' : 'rgba(226,27,27,0.3)'};color:${state.wooTestStatus.wc_connected ? '#166534' : '#991b1b'}">
+                    <div style="font-weight:700">${state.wooTestStatus.wc_connected ? state.wooTestStatus.message : `Échec connexion WooCommerce : ${state.wooTestStatus.error}`}</div>
+                    ${state.wooTestStatus.wp_media_message ? `<div style="font-size:11px;margin-top:4px;opacity:0.9">${state.wooTestStatus.wp_media_message}</div>` : ''}
+                  </div>`
+                : ''
+            }
           </form>
+        </div>
+
+        <!-- Pre-Sync Product Pictures Control & WooCommerce Readiness -->
+        <div class="panel" style="grid-column:1 / -1">
+          <div class="panel-header" style="flex-wrap:wrap;gap:10px">
+            <div>
+              <span class="panel-title">Contrôle & Organisation des Photos avant Synchronisation WooCommerce</span>
+              <div style="font-size:11px;color:var(--ink-400);margin-top:2px">Vérifiez, ajoutez, réordonnez ou remplacez les photos produit (#1 = Image Principale) avant d'envoyer vers electrozen.ma</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input id="input-woo-sync-search" class="input" style="width:210px" placeholder="Filtrer article, marque, SKU..." value="${state.wooSyncSearch || ''}" />
+              <div class="segmented">
+                ${[
+                  { id: 'all', label: `Tous (${state.products.length})` },
+                  { id: 'pending', label: `À Sync (${state.products.filter((x) => x.woo_sync_status !== 'synced').length})` },
+                  { id: 'no_photo', label: `Sans Photo (${state.products.filter((x) => getProductImages(x).length === 0).length})` },
+                  { id: 'with_photo', label: `Avec Photos (${state.products.filter((x) => getProductImages(x).length > 0).length})` },
+                ]
+                  .map(
+                    (f) => `<button type="button" class="seg-btn ${state.wooSyncFilter === f.id ? 'active' : ''}" data-woo-filter="${f.id}">${f.label}</button>`
+                  )
+                  .join('')}
+              </div>
+              <button type="button" class="btn btn-primary" id="btn-sync-woo-panel">${ICONS.sync}<span>Synchroniser Tous (${state.products.filter((x) => x.woo_sync_status !== 'synced').length})</span></button>
+            </div>
+          </div>
+          ${
+            state.wooSyncReport
+              ? `<div style="margin:12px 16px 0;padding:10px 12px;border-radius:8px;font-size:12px;background:${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#fef2f2' : '#ecfdf5'};border:1px solid ${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#fecaca' : '#a7f3d0'};color:${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#991b1b' : '#065f46'}">
+                  <div style="font-weight:700">${state.wooSyncReport.error ? state.wooSyncReport.error : `Sync WooCommerce : ${state.wooSyncReport.syncedCount} synchronisé(s), ${state.wooSyncReport.failedCount || 0} échec(s).`}</div>
+                  ${state.wooSyncReport.localSkippedImagesTotal > 0 ? `<div style="font-size:11px;margin-top:4px">${state.wooSyncReport.localSkippedImagesTotal} photo(s) locale(s) ignorée(s) car aucun Mot de passe d'application WP Médias n'est saisi (utilisez Recherche Photo Web ou ajoutez les identifiants WP ci-dessus).</div>` : ''}
+                  ${(state.wooSyncReport.errors || []).slice(0, 4).map((e) => `<div class="mono" style="font-size:11px;margin-top:2px">• ${e.name} (${e.sku}) : ${e.error}</div>`).join('')}
+                </div>`
+              : ''
+          }
+          <div class="table-wrap" style="max-height:420px;overflow-y:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Article & SKU</th>
+                  <th>Galerie Photos (#1 Principale)</th>
+                  <th style="text-align:center">Stock</th>
+                  <th style="text-align:end">Prix</th>
+                  <th>Statut WooCommerce</th>
+                  <th style="text-align:end">Actions Avant Sync</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(() => {
+                  const q = String(state.wooSyncSearch || '').toLowerCase().trim();
+                  const list = state.products.filter((p) => {
+                    const imgs = getProductImages(p);
+                    if (state.wooSyncFilter === 'pending' && p.woo_sync_status === 'synced') return false;
+                    if (state.wooSyncFilter === 'no_photo' && imgs.length > 0) return false;
+                    if (state.wooSyncFilter === 'with_photo' && imgs.length === 0) return false;
+                    if (q && !`${p.name_fr} ${p.brand} ${p.model_number} ${p.sku} ${p.barcode}`.toLowerCase().includes(q)) return false;
+                    return true;
+                  });
+                  if (list.length === 0) {
+                    return '<tr><td colspan="6" style="text-align:center;color:var(--ink-400);padding:24px">Aucun article dans ce filtre.</td></tr>';
+                  }
+                  return list
+                    .slice(0, 60)
+                    .map((p) => {
+                      const imgs = getProductImages(p);
+                      return `
+                        <tr>
+                          <td>
+                            <div style="font-weight:700;color:var(--ink-900);max-width:240px">${getProdName(p)}</div>
+                            <div class="mono" style="font-size:11px;color:var(--ink-400)">SKU: ${p.sku || p.barcode} ${p.woo_id_verified ? `• Woo #${p.woo_id}` : ''}</div>
+                          </td>
+                          <td>
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                              ${
+                                imgs.length === 0
+                                  ? `<span class="tag tag-danger" style="font-size:10.5px">Aucune photo</span>`
+                                  : imgs
+                                      .slice(0, 4)
+                                      .map(
+                                        (u, idx) => `<div style="position:relative;border:2px solid ${idx === 0 ? '#4f46e5' : '#e2e8f0'};border-radius:6px;padding:1px;background:#fff">
+                                            <img src="${u}" style="width:38px;height:38px;object-fit:contain;display:block" loading="lazy" />
+                                            ${idx === 0 ? `<span style="position:absolute;top:-5px;left:-4px;background:#4f46e5;color:#fff;font-size:8px;font-weight:800;padding:0 3px;border-radius:4px">★1</span>` : ''}
+                                          </div>`
+                                      )
+                                      .join('')
+                              }
+                              ${imgs.length > 4 ? `<span class="tag" style="font-size:10px">+${imgs.length - 4}</span>` : ''}
+                            </div>
+                          </td>
+                          <td style="text-align:center"><span class="tag ${p.stock_quantity > 0 ? 'tag-ok' : 'tag-danger'} num">${p.stock_quantity}</span></td>
+                          <td class="num" style="text-align:end;font-weight:700">${fmtMoney(p.retail_price)}</td>
+                          <td>
+                            <span class="tag ${p.woo_sync_status === 'synced' ? 'tag-ok' : 'tag-warn'}">${p.woo_sync_status === 'synced' ? 'Synchronisé' : 'En attente'}</span>
+                            ${p.woo_last_error ? `<div style="font-size:10px;color:#b91c1c;max-width:170px;margin-top:2px">${p.woo_last_error}</div>` : ''}
+                          </td>
+                          <td style="text-align:end">
+                            <div class="action-group">
+                              <button type="button" class="btn btn-sm btn-open-pictures" data-id="${p.id}">${ICONS.image}<span>Gérer (${imgs.length})</span></button>
+                              <button type="button" class="btn btn-sm btn-open-pictures" data-id="${p.id}" data-web="1" title="Chercher une photo officielle sur le Web">${ICONS.search}</button>
+                              <button type="button" class="btn btn-sm btn-dark btn-sync-single-woo" data-id="${p.id}">Sync</button>
+                            </div>
+                          </td>
+                        </tr>
+                      `;
+                    })
+                    .join('');
+                })()}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <!-- Backup, CSV Catalog Import, Store Init & Audit Log -->
@@ -2386,6 +2582,7 @@ function renderInspectorModal(t) {
                     </div>
                   </div>
                   <div class="action-group">
+                    <button class="btn btn-sm btn-open-pictures" data-id="${p.id}">${ICONS.image}<span>Photos (${getProductImages(p).length})</span></button>
                     <button class="btn btn-sm btn-pos btn-inspector-pos" data-id="${p.id}" data-tier="retail">+ Vendre Détail</button>
                     <button class="btn btn-sm btn-dark btn-inspector-pos" data-id="${p.id}" data-tier="wholesale">+ Vendre Gros</button>
                   </div>
@@ -2505,13 +2702,14 @@ function renderProductModal() {
   const randomBarcode = ep?.barcode || '';
   const aiEngine = (state.settings?.ai_provider || 'gemini').toUpperCase();
   const expanded = Boolean(state.productModalExpanded || state.editingProduct);
+  const gallery = state.productGalleryImages || [];
 
   return `
     <div class="modal-backdrop">
-      <div class="modal-box">
+      <div class="modal-box" style="max-width:780px">
         <div class="modal-header">
           <span style="font-weight:600;font-size:13.5px;color:var(--ink-900)">
-            ${state.editingProduct ? `Modifier l'article : ${state.editingProduct.name_fr}` : 'Ajout Rapide Article (Quick Add / Photos IA)'}
+            ${state.editingProduct ? `Modifier l'article : ${state.editingProduct.name_fr}` : 'Ajout Rapide Article (Quick Add / Galerie Photos & IA)'}
           </span>
           <div style="display:flex;gap:8px;align-items:center">
             <button type="button" class="btn btn-sm" id="btn-toggle-prod-expand" style="background:#f3e8ff;color:#5b21b6;border-color:#d8b4fe;font-weight:700">
@@ -2521,30 +2719,96 @@ function renderProductModal() {
           </div>
         </div>
         <form id="form-product-modal" class="modal-body" style="display:flex;flex-direction:column;gap:12px">
-          <input type="hidden" name="image_url" id="prod-image-url" value="${ep?.image_url || ''}" />
+          <input type="hidden" name="image_url" id="prod-image-url" value="${gallery[0] || ''}" />
 
-          <!-- Quick Photo + Vision Extract Bar -->
-          <div style="padding:12px;background:linear-gradient(135deg,#faf5ff 0%,#f8fafc 100%);border:1px solid #d8b4fe;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-            <div style="display:flex;align-items:center;gap:10px">
-              ${
-                ep?.image_url
-                  ? `<img id="prod-preview-img" src="${ep.image_url}" style="width:52px;height:52px;object-fit:contain;border-radius:8px;background:#fff;border:1px solid var(--border)" alt="" />`
-                  : `<div id="prod-preview-placeholder" style="width:52px;height:52px;border-radius:8px;background:#fff;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;font-size:10px;color:#64748b">Photo</div>`
-              }
+          <!-- Multi-Image Gallery & 4-Way Photo Studio Card -->
+          <div style="padding:12px;background:linear-gradient(135deg,#faf5ff 0%,#f8fafc 100%);border:1px solid #d8b4fe;border-radius:10px;display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
               <div>
-                <div style="font-weight:700;font-size:12.5px;color:#5b21b6">Image & Extraction Produit par Photos (IA)</div>
-                <div style="font-size:11px;color:#64748b">Importez 1 ou 2 photos de la boîte/étiquette : l’IA lit marque, modèle et caractéristiques.</div>
+                <div style="font-weight:700;font-size:12.5px;color:#5b21b6">Galerie Photos Produit (${gallery.length}) • Photo Studio & Recherche Web</div>
+                <div style="font-size:11px;color:#64748b">La photo #1 (Principale) est affichée en boutique POS et comme image principale WooCommerce.</div>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <label class="btn btn-sm" style="cursor:pointer;margin:0">
+                  <input type="file" id="input-prod-add-gallery" accept="image/*" multiple style="display:none" />
+                  <span>+ Ajouter Photo(s)</span>
+                </label>
+                <label class="btn btn-sm btn-dark" style="cursor:pointer;margin:0">
+                  <input type="file" id="input-prod-photos-ai" accept="image/*" multiple style="display:none" />
+                  <span>${state.productPhotoAiLoading ? 'Analyse photos...' : 'Lire Boîte + Extraire IA'}</span>
+                </label>
+                <button type="button" class="btn btn-sm" id="btn-toggle-modal-web-img" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;font-weight:700">
+                  ${ICONS.search}<span>Photo Officielle Web</span>
+                </button>
               </div>
             </div>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <label class="btn btn-sm btn-dark" style="cursor:pointer;margin:0">
-                <input type="file" id="input-prod-photos-ai" accept="image/*" multiple style="display:none" />
-                <span>${state.productPhotoAiLoading ? 'Analyse photos...' : 'Importer Photo(s) + Extraire IA'}</span>
-              </label>
+
+            <!-- Interactive Gallery Thumbnails Strip -->
+            <div style="display:flex;gap:10px;overflow-x:auto;padding:4px 2px">
+              ${
+                gallery.length === 0
+                  ? `<div style="padding:14px 18px;border:1px dashed #cbd5e1;border-radius:8px;background:#fff;font-size:11.5px;color:#64748b;width:100%;text-align:center">Aucune photo ajoutée. Cliquez sur "+ Ajouter Photo(s)", "Photo Officielle Web" ou "Lire Boîte (IA)".</div>`
+                  : gallery
+                      .map(
+                        (url, idx) => `
+                    <div style="min-width:112px;background:#fff;border:2px solid ${idx === 0 ? '#5b21b6' : '#e2e8f0'};border-radius:8px;padding:6px;display:flex;flex-direction:column;gap:5px;flex-shrink:0">
+                      <div style="position:relative;height:78px;display:flex;align-items:center;justify-content:center;background:#fff">
+                        <img src="${url}" style="max-width:100%;max-height:76px;object-fit:contain" />
+                        <span style="position:absolute;top:0;left:0;background:${idx === 0 ? '#5b21b6' : '#64748b'};color:#fff;font-size:9px;font-weight:800;padding:1px 5px;border-radius:4px">${idx === 0 ? '★ Principale' : `#${idx + 1}`}</span>
+                      </div>
+                      <div style="display:flex;justify-content:space-between;gap:3px">
+                        <button type="button" class="btn btn-sm btn-modal-img-left" data-idx="${idx}" ${idx === 0 ? 'disabled' : ''} style="height:22px;padding:0 5px;font-size:10px" title="Déplacer à gauche">◀</button>
+                        <button type="button" class="btn btn-sm btn-modal-img-primary" data-idx="${idx}" ${idx === 0 ? 'disabled' : ''} style="height:22px;padding:0 6px;font-size:10px;color:#5b21b6" title="Définir Principale">★</button>
+                        <button type="button" class="btn btn-sm btn-modal-img-right" data-idx="${idx}" ${idx === gallery.length - 1 ? 'disabled' : ''} style="height:22px;padding:0 5px;font-size:10px" title="Déplacer à droite">▶</button>
+                        <button type="button" class="btn btn-sm btn-modal-img-del" data-idx="${idx}" style="height:22px;padding:0 6px;font-size:10px;color:#e21b1b" title="Supprimer">✕</button>
+                      </div>
+                    </div>`
+                      )
+                      .join('')
+              }
+            </div>
+
+            <!-- Studio Mode Toolbar -->
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-top:6px;border-top:1px solid #ede9fe">
+              <select id="select-modal-studio-mode" class="input" style="flex:1;min-width:210px;height:30px;font-size:11.5px">
+                <option value="clean_crop" ${state.productStudioMode === 'clean_crop' ? 'selected' : ''}>🖼️ Cadrage Studio Pro (Recommandé — sans détourage destructif)</option>
+                <option value="white_cutout" ${state.productStudioMode === 'white_cutout' ? 'selected' : ''}>✂️ Détourage Fond Blanc Intelligent (Edge-Safe)</option>
+                <option value="ai_render" ${state.productStudioMode === 'ai_render' ? 'selected' : ''}>✨ Rendu Studio IA 3D (Synthèse propre)</option>
+                <option value="original_framed" ${state.productStudioMode === 'original_framed' ? 'selected' : ''}>📐 Format Carré 1000×1000 (Image entière)</option>
+              </select>
               <button type="button" class="btn btn-sm btn-primary" id="btn-gen-pro-photo" ${state.productProPhotoLoading ? 'disabled' : ''}>
-                ${state.productProPhotoLoading ? 'Création Studio...' : 'Photo Pro Studio (Fond Blanc)'}
+                ${state.productProPhotoLoading ? 'Traitement Studio...' : 'Appliquer Studio sur Photo #1'}
               </button>
             </div>
+
+            <!-- Inline Web Official Image Finder -->
+            ${
+              state.webImageSearchOpen
+                ? `<div style="padding:10px;background:#fff;border:1px solid #bfdbfe;border-radius:8px;display:flex;flex-direction:column;gap:8px">
+                    <div style="display:flex;gap:6px">
+                      <input id="input-modal-web-img-q" class="input" style="flex:1" placeholder="Marque + Modèle + Désignation (ex: SONIC Four 45L FE5022SC)..." value="${state.webImageSearchQuery || ''}" />
+                      <button type="button" class="btn btn-sm btn-dark" id="btn-run-modal-web-img" ${state.webImageSearchLoading ? 'disabled' : ''}>
+                        ${state.webImageSearchLoading ? 'Recherche...' : 'Rechercher'}
+                      </button>
+                    </div>
+                    ${
+                      state.webImageSearchResults.length > 0
+                        ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px;max-height:190px;overflow-y:auto">
+                            ${state.webImageSearchResults
+                              .map(
+                                (r, rIdx) => `
+                              <div class="btn-pick-modal-web-img" data-ridx="${rIdx}" style="cursor:pointer;border:1px solid #e2e8f0;border-radius:6px;padding:4px;background:#fff;display:flex;flex-direction:column;align-items:center;gap:4px" title="Cliquer pour télécharger et ajouter à la galerie">
+                                <img src="${r.thumb || r.url}" style="width:80px;height:72px;object-fit:contain" />
+                                <span style="font-size:9.5px;color:#1d4ed8;font-weight:700">+ Ajouter</span>
+                              </div>`
+                              )
+                              .join('')}
+                          </div>`
+                        : `<div style="font-size:11px;color:#64748b">${state.webImageSearchLoading ? 'Recherche des photos officielles sur le Web...' : 'Lancez la recherche pour choisir une vraie photo studio constructeur.'}</div>`
+                    }
+                  </div>`
+                : ''
+            }
           </div>
 
           <!-- Barcode Row -->
@@ -2663,6 +2927,141 @@ function renderProductModal() {
             <button type="submit" class="btn btn-dark" style="padding:10px 20px">Enregistrer l'Article</button>
           </div>
         </form>
+      </div>
+    </div>
+  `;
+}
+
+function syncProductFormDraftFromDom() {
+  const form = document.getElementById('form-product-modal');
+  if (!form) return;
+  const fd = new FormData(form);
+  const patch = Object.fromEntries(fd.entries());
+  const base = state.editingProduct || state.prefillProduct || {};
+  const merged = {
+    ...base,
+    ...patch,
+    images: [...(state.productGalleryImages || [])],
+    image_url: (state.productGalleryImages && state.productGalleryImages[0]) || '',
+  };
+  if (state.editingProduct) state.editingProduct = merged;
+  else state.prefillProduct = merged;
+}
+
+window.openProductPicturesModal = async function (productId, autoSearchWeb = false) {
+  const prod = state.products.find((p) => Number(p.id) === Number(productId));
+  if (!prod) return;
+  state.picturesModalProduct = prod;
+  state.picturesModalImages = getProductImages(prod);
+  state.picturesModalStudioMode = state.productStudioMode || 'clean_crop';
+  state.picturesModalSearchQuery = [prod.brand, prod.model_number, prod.name_fr].filter(Boolean).join(' ').trim();
+  state.picturesModalSearchResults = [];
+  state.picturesModalBusy = false;
+  render();
+  if (autoSearchWeb && state.picturesModalSearchQuery) {
+    state.picturesModalSearchLoading = true;
+    render();
+    try {
+      const r = await fetch(`/api/products/image-search?q=${encodeURIComponent(state.picturesModalSearchQuery)}`);
+      const d = await r.json();
+      state.picturesModalSearchResults = d.results || [];
+    } catch {}
+    state.picturesModalSearchLoading = false;
+    render();
+  }
+};
+
+function renderProductPicturesModal() {
+  const p = state.picturesModalProduct;
+  if (!p) return '';
+  const imgs = state.picturesModalImages || [];
+  return `
+    <div class="modal-backdrop">
+      <div class="modal-box" style="max-width:820px">
+        <div class="modal-header">
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--ink-900)">Gestionnaire Photos Produit — ${getProdName(p)}</div>
+            <div class="mono" style="font-size:11px;color:var(--ink-400)">${p.brand} • SKU: ${p.sku || p.barcode} • Photo #1 = Image Principale POS & WooCommerce</div>
+          </div>
+          <button type="button" class="btn btn-sm" id="btn-close-pictures-modal">Fermer</button>
+        </div>
+        <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+          <!-- Upload & Actions Toolbar -->
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--panel-subtle);border:1px solid var(--border);border-radius:10px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <label class="btn btn-sm btn-dark" style="cursor:pointer;margin:0">
+                <input type="file" id="input-pics-modal-upload" accept="image/*" multiple style="display:none" />
+                <span>+ Importer Photo(s) PC</span>
+              </label>
+              <select id="select-pics-modal-studio-mode" class="input" style="height:30px;font-size:11.5px;width:240px">
+                <option value="clean_crop" ${state.picturesModalStudioMode === 'clean_crop' ? 'selected' : ''}>🖼️ Cadrage Studio Pro</option>
+                <option value="white_cutout" ${state.picturesModalStudioMode === 'white_cutout' ? 'selected' : ''}>✂️ Détourage Fond Blanc Intelligent</option>
+                <option value="ai_render" ${state.picturesModalStudioMode === 'ai_render' ? 'selected' : ''}>✨ Rendu Studio IA 3D</option>
+                <option value="original_framed" ${state.picturesModalStudioMode === 'original_framed' ? 'selected' : ''}>📐 Format Carré 1000×1000</option>
+              </select>
+            </div>
+            ${state.picturesModalBusy ? `<span class="tag tag-warn">Traitement en cours...</span>` : `<span class="tag tag-ok">${imgs.length} photo(s) dans la galerie</span>`}
+          </div>
+
+          <!-- Current Gallery Grid -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">
+            ${
+              imgs.length === 0
+                ? `<div style="grid-column:1 / -1;padding:24px;text-align:center;color:var(--ink-400);border:1px dashed var(--border);border-radius:8px">Aucune photo enregistrée pour cet article. Importez depuis votre PC ou sélectionnez une photo officielle ci-dessous.</div>`
+                : imgs
+                    .map(
+                      (url, idx) => `
+                  <div style="border:2px solid ${idx === 0 ? '#4f46e5' : 'var(--border)'};border-radius:10px;padding:8px;background:#fff;display:flex;flex-direction:column;gap:8px">
+                    <div style="position:relative;height:110px;display:flex;align-items:center;justify-content:center;background:#fff">
+                      <img src="${url}" style="max-width:100%;max-height:105px;object-fit:contain" />
+                      <span style="position:absolute;top:0;left:0;background:${idx === 0 ? '#4f46e5' : '#64748b'};color:#fff;font-size:9.5px;font-weight:800;padding:1px 6px;border-radius:5px">${idx === 0 ? '★ Principale' : `#${idx + 1}`}</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px">
+                      <button type="button" class="btn btn-sm btn-pics-left" data-idx="${idx}" ${idx === 0 ? 'disabled' : ''} style="height:26px;padding:0;justify-content:center" title="Déplacer avant">◀</button>
+                      <button type="button" class="btn btn-sm btn-pics-primary" data-idx="${idx}" ${idx === 0 ? 'disabled' : ''} style="height:26px;padding:0;justify-content:center;color:#4f46e5" title="Définir Principale">★</button>
+                      <button type="button" class="btn btn-sm btn-pics-right" data-idx="${idx}" ${idx === imgs.length - 1 ? 'disabled' : ''} style="height:26px;padding:0;justify-content:center" title="Déplacer après">▶</button>
+                      <button type="button" class="btn btn-sm btn-pics-del" data-idx="${idx}" style="height:26px;padding:0;justify-content:center;color:#e21b1b" title="Supprimer">✕</button>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-pics-studio-one" data-idx="${idx}" ${state.picturesModalBusy ? 'disabled' : ''} style="height:26px;font-size:11px;justify-content:center">
+                      ✨ Studio sur celle-ci
+                    </button>
+                  </div>`
+                    )
+                    .join('')
+            }
+          </div>
+
+          <!-- Official Web Studio Image Search -->
+          <div style="padding:12px;border:1px solid #bfdbfe;background:#f8fafc;border-radius:10px;display:flex;flex-direction:column;gap:8px">
+            <div style="font-weight:700;font-size:12px;color:#1d4ed8">Rechercher & Ajouter une Photo Officielle Constructeur (Web)</div>
+            <div style="display:flex;gap:8px">
+              <input id="input-pics-modal-web-q" class="input" style="flex:1" value="${state.picturesModalSearchQuery || ''}" placeholder="Marque + Modèle + Produit..." />
+              <button type="button" class="btn btn-sm btn-dark" id="btn-pics-modal-web-search" ${state.picturesModalSearchLoading ? 'disabled' : ''}>
+                ${state.picturesModalSearchLoading ? 'Recherche...' : 'Rechercher Web'}
+              </button>
+            </div>
+            ${
+              state.picturesModalSearchResults.length > 0
+                ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;max-height:195px;overflow-y:auto">
+                    ${state.picturesModalSearchResults
+                      .map(
+                        (r, rIdx) => `
+                      <div class="btn-pick-pics-web-img" data-ridx="${rIdx}" style="cursor:pointer;border:1px solid #cbd5e1;border-radius:8px;padding:5px;background:#fff;display:flex;flex-direction:column;align-items:center;gap:4px" title="Cliquer pour télécharger et ajouter">
+                        <img src="${r.thumb || r.url}" style="width:88px;height:76px;object-fit:contain" />
+                        <span style="font-size:10px;color:#1d4ed8;font-weight:700">+ Ajouter</span>
+                      </div>`
+                      )
+                      .join('')}
+                  </div>`
+                : `<div style="font-size:11px;color:#64748b">${state.picturesModalSearchLoading ? 'Chargement des photos officielles...' : 'Cliquez sur "Rechercher Web" pour trouver les visuels studio officiels de ce modèle.'}</div>`
+            }
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:4px;border-top:1px solid var(--border)">
+            <button type="button" class="btn btn-dark" id="btn-save-pictures-modal" ${state.picturesModalBusy ? 'disabled' : ''}>Enregistrer la Galerie</button>
+            <button type="button" class="btn btn-primary" id="btn-save-sync-pictures-modal" ${state.picturesModalBusy ? 'disabled' : ''}>Enregistrer & Sync WooCommerce</button>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -3192,23 +3591,321 @@ function attachEvents() {
   const btnNewProd = document.getElementById('btn-new-product');
   if (btnNewProd) {
     btnNewProd.onclick = () => {
-      state.editingProduct = null;
-      state.productModalOpen = true;
+      openProductModalWith(null, false);
       render();
     };
   }
 
+  const runWooBatchSync = async () => {
+    showToast('Synchronisation WooCommerce en cours...');
+    const res = await fetch('/api/woocommerce/sync', { method: 'POST' });
+    const d = await res.json().catch(() => ({}));
+    state.wooSyncReport = d;
+    await loadAllData();
+    if (res.ok && d.success) {
+      showToast(`Synchronisation WooCommerce réussie (${d.syncedCount} article(s))`);
+    } else if (res.ok) {
+      showToast(`WooCommerce : ${d.syncedCount} OK, ${d.failedCount} échec(s)`);
+    } else {
+      showToast(d.error || 'Échec synchronisation WooCommerce');
+    }
+  };
+
   const btnSyncWoo = document.getElementById('btn-sync-woo');
-  if (btnSyncWoo) {
-    btnSyncWoo.onclick = async () => {
-      const res = await fetch('/api/woocommerce/sync', { method: 'POST' });
-      if (res.ok) {
-        const d = await res.json();
-        await loadAllData();
-        showToast(`Synchronisation WooCommerce terminée (${d.syncedCount} articles)`);
+  if (btnSyncWoo) btnSyncWoo.onclick = runWooBatchSync;
+  const btnSyncWooPanel = document.getElementById('btn-sync-woo-panel');
+  if (btnSyncWooPanel) btnSyncWooPanel.onclick = runWooBatchSync;
+
+  const btnTestWoo = document.getElementById('btn-test-woo');
+  if (btnTestWoo) {
+    btnTestWoo.onclick = async () => {
+      const form = document.getElementById('form-save-settings');
+      const fd = form ? new FormData(form) : null;
+      const body = fd ? Object.fromEntries(fd.entries()) : {};
+      state.wooTestLoading = true;
+      render();
+      try {
+        const res = await fetch('/api/woocommerce/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        state.wooTestStatus = data;
+      } catch (err) {
+        state.wooTestStatus = { success: false, wc_connected: false, error: err.message };
+      }
+      state.wooTestLoading = false;
+      render();
+    };
+  }
+
+  document.querySelectorAll('[data-woo-filter]').forEach((b) => {
+    b.onclick = () => {
+      state.wooSyncFilter = b.getAttribute('data-woo-filter') || 'all';
+      render();
+    };
+  });
+
+  const inpWooSearch = document.getElementById('input-woo-sync-search');
+  if (inpWooSearch) {
+    inpWooSearch.oninput = (e) => {
+      state.wooSyncSearch = e.target.value;
+      render();
+      const el = document.getElementById('input-woo-sync-search');
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
       }
     };
   }
+
+  document.querySelectorAll('.btn-sync-single-woo').forEach((btn) => {
+    btn.onclick = async () => {
+      const id = Number(btn.getAttribute('data-id'));
+      showToast(`Synchronisation article #${id} vers WooCommerce...`);
+      const res = await fetch(`/api/woocommerce/sync-single/${id}`, { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      await loadAllData();
+      if (res.ok && d.success) {
+        showToast(`Article synchronisé (Woo #${d.wooId})`);
+      } else {
+        showToast(d.error || 'Échec sync WooCommerce');
+      }
+    };
+  });
+
+  document.querySelectorAll('.btn-open-pictures').forEach((btn) => {
+    btn.onclick = () => {
+      const id = Number(btn.getAttribute('data-id'));
+      const autoWeb = btn.getAttribute('data-web') === '1';
+      window.openProductPicturesModal(id, autoWeb);
+    };
+  });
+
+  const btnClosePicsModal = document.getElementById('btn-close-pictures-modal');
+  if (btnClosePicsModal) {
+    btnClosePicsModal.onclick = () => {
+      state.picturesModalProduct = null;
+      state.picturesModalSearchResults = [];
+      render();
+    };
+  }
+
+  const selPicsStudioMode = document.getElementById('select-pics-modal-studio-mode');
+  if (selPicsStudioMode) {
+    selPicsStudioMode.onchange = (e) => {
+      state.picturesModalStudioMode = e.target.value;
+    };
+  }
+
+  const inpPicsUpload = document.getElementById('input-pics-modal-upload');
+  if (inpPicsUpload) {
+    inpPicsUpload.onchange = async (e) => {
+      const files = Array.from(e.target.files || []).slice(0, 6);
+      if (!files.length) return;
+      state.picturesModalBusy = true;
+      render();
+      for (const file of files) {
+        try {
+          const b64 = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.readAsDataURL(file);
+          });
+          const upRes = await fetch('/api/products/upload-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageBase64: b64, mimeType: file.type || 'image/jpeg' }),
+          });
+          if (upRes.ok) {
+            const d = await upRes.json();
+            if (d.image_url && !state.picturesModalImages.includes(d.image_url)) {
+              state.picturesModalImages.push(d.image_url);
+            }
+          }
+        } catch {}
+      }
+      state.picturesModalBusy = false;
+      render();
+    };
+  }
+
+  document.querySelectorAll('.btn-pics-left').forEach((b) => {
+    b.onclick = () => {
+      const i = Number(b.getAttribute('data-idx'));
+      if (i > 0) {
+        const arr = [...state.picturesModalImages];
+        [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+        state.picturesModalImages = arr;
+        render();
+      }
+    };
+  });
+  document.querySelectorAll('.btn-pics-right').forEach((b) => {
+    b.onclick = () => {
+      const i = Number(b.getAttribute('data-idx'));
+      if (i < state.picturesModalImages.length - 1) {
+        const arr = [...state.picturesModalImages];
+        [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]];
+        state.picturesModalImages = arr;
+        render();
+      }
+    };
+  });
+  document.querySelectorAll('.btn-pics-primary').forEach((b) => {
+    b.onclick = () => {
+      const i = Number(b.getAttribute('data-idx'));
+      const url = state.picturesModalImages[i];
+      if (url) {
+        state.picturesModalImages = [url, ...state.picturesModalImages.filter((_, idx) => idx !== i)];
+        render();
+      }
+    };
+  });
+  document.querySelectorAll('.btn-pics-del').forEach((b) => {
+    b.onclick = () => {
+      const i = Number(b.getAttribute('data-idx'));
+      state.picturesModalImages = state.picturesModalImages.filter((_, idx) => idx !== i);
+      render();
+    };
+  });
+  document.querySelectorAll('.btn-pics-studio-one').forEach((b) => {
+    b.onclick = async () => {
+      const i = Number(b.getAttribute('data-idx'));
+      const url = state.picturesModalImages[i];
+      if (!url) return;
+      state.picturesModalBusy = true;
+      render();
+      try {
+        const p = state.picturesModalProduct;
+        const r = await fetch('/api/ai/generate-pro-product-photo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_url: url,
+            product_name: p?.name_fr || '',
+            brand: p?.brand || '',
+            mode: state.picturesModalStudioMode || 'clean_crop',
+          }),
+        });
+        const d = await r.json();
+        if (r.ok && d.image_url) {
+          state.picturesModalImages[i] = d.image_url;
+          showToast('Photo Studio générée !');
+        } else {
+          showToast(d.error || 'Échec Studio Photo');
+        }
+      } catch (err) {
+        showToast(`Erreur: ${err.message}`);
+      }
+      state.picturesModalBusy = false;
+      render();
+    };
+  });
+
+  const inpPicsWebQ = document.getElementById('input-pics-modal-web-q');
+  if (inpPicsWebQ) {
+    inpPicsWebQ.oninput = (e) => {
+      state.picturesModalSearchQuery = e.target.value;
+    };
+    inpPicsWebQ.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('btn-pics-modal-web-search')?.click();
+      }
+    };
+  }
+
+  const btnPicsWebSearch = document.getElementById('btn-pics-modal-web-search');
+  if (btnPicsWebSearch) {
+    btnPicsWebSearch.onclick = async () => {
+      const q = (document.getElementById('input-pics-modal-web-q')?.value || state.picturesModalSearchQuery || '').trim();
+      if (!q) return;
+      state.picturesModalSearchQuery = q;
+      state.picturesModalSearchLoading = true;
+      render();
+      try {
+        const r = await fetch(`/api/products/image-search?q=${encodeURIComponent(q)}`);
+        const d = await r.json();
+        state.picturesModalSearchResults = d.results || [];
+      } catch {
+        state.picturesModalSearchResults = [];
+      }
+      state.picturesModalSearchLoading = false;
+      render();
+    };
+  }
+
+  document.querySelectorAll('.btn-pick-pics-web-img').forEach((card) => {
+    card.onclick = async () => {
+      const idx = Number(card.getAttribute('data-ridx'));
+      const item = state.picturesModalSearchResults[idx];
+      if (!item) return;
+      state.picturesModalBusy = true;
+      render();
+      try {
+        const r = await fetch('/api/products/download-web-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: item.url, thumb: item.thumb }),
+        });
+        const d = await r.json();
+        if (r.ok && d.image_url) {
+          state.picturesModalImages.push(d.image_url);
+          showToast('Photo officielle ajoutée à la galerie !');
+        } else {
+          showToast(d.error || 'Téléchargement impossible');
+        }
+      } catch (err) {
+        showToast(`Erreur: ${err.message}`);
+      }
+      state.picturesModalBusy = false;
+      render();
+    };
+  });
+
+  const savePicturesGallery = async (alsoSyncWoo = false) => {
+    const p = state.picturesModalProduct;
+    if (!p) return;
+    state.picturesModalBusy = true;
+    render();
+    try {
+      const r = await fetch(`/api/products/${p.id}/images`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images: state.picturesModalImages }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        state.picturesModalBusy = false;
+        render();
+        showToast(err.error || 'Erreur sauvegarde galerie');
+        return;
+      }
+      if (alsoSyncWoo) {
+        const sr = await fetch(`/api/woocommerce/sync-single/${p.id}`, { method: 'POST' });
+        const sd = await sr.json().catch(() => ({}));
+        state.picturesModalProduct = null;
+        state.picturesModalBusy = false;
+        await loadAllData();
+        showToast(sr.ok && sd.success ? `Galerie enregistrée & synchronisée sur WooCommerce (#${sd.wooId}) !` : `Galerie enregistrée (Sync Woo: ${sd.error || 'échec'})`);
+        return;
+      }
+      state.picturesModalProduct = null;
+      state.picturesModalBusy = false;
+      await loadAllData();
+      showToast('Galerie photos enregistrée');
+    } catch (err) {
+      state.picturesModalBusy = false;
+      render();
+      showToast(`Erreur: ${err.message}`);
+    }
+  };
+  const btnSavePics = document.getElementById('btn-save-pictures-modal');
+  if (btnSavePics) btnSavePics.onclick = () => savePicturesGallery(false);
+  const btnSaveSyncPics = document.getElementById('btn-save-sync-pictures-modal');
+  if (btnSaveSyncPics) btnSaveSyncPics.onclick = () => savePicturesGallery(true);
 
   document.querySelectorAll('.btn-inspect-code').forEach((btn) => {
     btn.onclick = () => openBarcodeInspector(btn.getAttribute('data-barcode'));
@@ -3291,8 +3988,8 @@ function attachEvents() {
   document.querySelectorAll('.btn-edit-prod').forEach((btn) => {
     btn.onclick = () => {
       const id = Number(btn.getAttribute('data-id'));
-      state.editingProduct = state.products.find((p) => p.id === id) || null;
-      state.productModalOpen = true;
+      const prod = state.products.find((p) => p.id === id) || null;
+      openProductModalWith(prod, true);
       render();
     };
   });
@@ -3313,16 +4010,197 @@ function attachEvents() {
   const btnToggleProdExpand = document.getElementById('btn-toggle-prod-expand');
   if (btnToggleProdExpand) {
     btnToggleProdExpand.onclick = () => {
+      syncProductFormDraftFromDom();
       state.productModalExpanded = !state.productModalExpanded;
       render();
     };
   }
+
+  const selModalStudioMode = document.getElementById('select-modal-studio-mode');
+  if (selModalStudioMode) {
+    selModalStudioMode.onchange = (e) => {
+      state.productStudioMode = e.target.value;
+    };
+  }
+
+  const inpAddGallery = document.getElementById('input-prod-add-gallery');
+  if (inpAddGallery) {
+    inpAddGallery.onchange = async (e) => {
+      const files = Array.from(e.target.files || []).slice(0, 6);
+      if (!files.length) return;
+      syncProductFormDraftFromDom();
+      state.productProPhotoLoading = true;
+      render();
+      for (const file of files) {
+        try {
+          const b64 = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.readAsDataURL(file);
+          });
+          const upRes = await fetch('/api/products/upload-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageBase64: b64, mimeType: file.type || 'image/jpeg' }),
+          });
+          if (upRes.ok) {
+            const d = await upRes.json();
+            if (d.image_url && !state.productGalleryImages.includes(d.image_url)) {
+              state.productGalleryImages.push(d.image_url);
+            }
+          }
+        } catch {}
+      }
+      state.productProPhotoLoading = false;
+      render();
+    };
+  }
+
+  document.querySelectorAll('.btn-modal-img-left').forEach((b) => {
+    b.onclick = () => {
+      syncProductFormDraftFromDom();
+      const i = Number(b.getAttribute('data-idx'));
+      if (i > 0) {
+        const arr = [...state.productGalleryImages];
+        [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+        state.productGalleryImages = arr;
+        render();
+      }
+    };
+  });
+  document.querySelectorAll('.btn-modal-img-right').forEach((b) => {
+    b.onclick = () => {
+      syncProductFormDraftFromDom();
+      const i = Number(b.getAttribute('data-idx'));
+      if (i < state.productGalleryImages.length - 1) {
+        const arr = [...state.productGalleryImages];
+        [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]];
+        state.productGalleryImages = arr;
+        render();
+      }
+    };
+  });
+  document.querySelectorAll('.btn-modal-img-primary').forEach((b) => {
+    b.onclick = () => {
+      syncProductFormDraftFromDom();
+      const i = Number(b.getAttribute('data-idx'));
+      const url = state.productGalleryImages[i];
+      if (url) {
+        state.productGalleryImages = [url, ...state.productGalleryImages.filter((_, idx) => idx !== i)];
+        render();
+      }
+    };
+  });
+  document.querySelectorAll('.btn-modal-img-del').forEach((b) => {
+    b.onclick = () => {
+      syncProductFormDraftFromDom();
+      const i = Number(b.getAttribute('data-idx'));
+      state.productGalleryImages = state.productGalleryImages.filter((_, idx) => idx !== i);
+      render();
+    };
+  });
+
+  const btnToggleModalWebImg = document.getElementById('btn-toggle-modal-web-img');
+  if (btnToggleModalWebImg) {
+    btnToggleModalWebImg.onclick = async () => {
+      syncProductFormDraftFromDom();
+      state.webImageSearchOpen = !state.webImageSearchOpen;
+      if (state.webImageSearchOpen) {
+        const qGuess = [
+          document.getElementById('prod-brand')?.value || '',
+          document.getElementById('prod-model')?.value || '',
+          document.getElementById('prod-name-fr')?.value || '',
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        if (qGuess) state.webImageSearchQuery = qGuess;
+        if (state.webImageSearchQuery && state.webImageSearchResults.length === 0) {
+          state.webImageSearchLoading = true;
+          render();
+          try {
+            const r = await fetch(`/api/products/image-search?q=${encodeURIComponent(state.webImageSearchQuery)}`);
+            const d = await r.json();
+            state.webImageSearchResults = d.results || [];
+          } catch {}
+          state.webImageSearchLoading = false;
+        }
+      }
+      render();
+    };
+  }
+
+  const inpModalWebQ = document.getElementById('input-modal-web-img-q');
+  if (inpModalWebQ) {
+    inpModalWebQ.oninput = (e) => {
+      state.webImageSearchQuery = e.target.value;
+    };
+    inpModalWebQ.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('btn-run-modal-web-img')?.click();
+      }
+    };
+  }
+
+  const btnRunModalWebImg = document.getElementById('btn-run-modal-web-img');
+  if (btnRunModalWebImg) {
+    btnRunModalWebImg.onclick = async () => {
+      syncProductFormDraftFromDom();
+      const q = (document.getElementById('input-modal-web-img-q')?.value || state.webImageSearchQuery || '').trim();
+      if (!q) return;
+      state.webImageSearchQuery = q;
+      state.webImageSearchLoading = true;
+      render();
+      try {
+        const r = await fetch(`/api/products/image-search?q=${encodeURIComponent(q)}`);
+        const d = await r.json();
+        state.webImageSearchResults = d.results || [];
+      } catch {
+        state.webImageSearchResults = [];
+      }
+      state.webImageSearchLoading = false;
+      render();
+    };
+  }
+
+  document.querySelectorAll('.btn-pick-modal-web-img').forEach((card) => {
+    card.onclick = async () => {
+      syncProductFormDraftFromDom();
+      const idx = Number(card.getAttribute('data-ridx'));
+      const item = state.webImageSearchResults[idx];
+      if (!item) return;
+      state.productProPhotoLoading = true;
+      render();
+      try {
+        const r = await fetch('/api/products/download-web-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: item.url, thumb: item.thumb }),
+        });
+        const d = await r.json();
+        if (r.ok && d.image_url) {
+          if (!state.productGalleryImages.includes(d.image_url)) {
+            state.productGalleryImages.unshift(d.image_url);
+          }
+          state.internetLookupBanner = { ok: true, msg: 'Photo officielle téléchargée et ajoutée comme #1 Principale !' };
+        } else {
+          showToast(d.error || 'Téléchargement impossible');
+        }
+      } catch (err) {
+        showToast(`Erreur: ${err.message}`);
+      }
+      state.productProPhotoLoading = false;
+      render();
+    };
+  });
 
   const inpProdPhotosAi = document.getElementById('input-prod-photos-ai');
   if (inpProdPhotosAi) {
     inpProdPhotosAi.onchange = async (e) => {
       const files = Array.from(e.target.files || []).slice(0, 4);
       if (files.length === 0) return;
+      syncProductFormDraftFromDom();
       state.productPhotoAiLoading = true;
       render();
       try {
@@ -3334,8 +4212,7 @@ function attachEvents() {
           });
         const images = await Promise.all(files.map(readAsB64));
         state.productBoxImages = images;
-        // Generate clean studio photo + extract product specs in parallel
-        let uploadedImageUrl = state.prefillProduct?.image_url || state.editingProduct?.image_url || '';
+        let uploadedImageUrl = state.productGalleryImages[0] || '';
         const proPromise = fetch('/api/ai/generate-pro-product-photo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3343,12 +4220,12 @@ function attachEvents() {
             images,
             product_name: document.getElementById('prod-name-fr')?.value || '',
             brand: document.getElementById('prod-brand')?.value || '',
+            mode: state.productStudioMode || 'clean_crop',
           }),
         })
           .then((r) => r.json())
           .catch(() => null);
 
-        // Extract product info from photos via AI Vision
         const exRes = await fetch('/api/ai/extract-product-from-images', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3371,6 +4248,9 @@ function attachEvents() {
             }
           } catch {}
         }
+        if (uploadedImageUrl && !state.productGalleryImages.includes(uploadedImageUrl)) {
+          state.productGalleryImages.unshift(uploadedImageUrl);
+        }
         state.productPhotoAiLoading = false;
         if (exRes.ok && exData.success) {
           const targetObj = state.editingProduct || state.prefillProduct || {};
@@ -3387,19 +4267,17 @@ function attachEvents() {
             description_ar: exData.description_ar || targetObj.description_ar || '',
             description_en: exData.description_en || targetObj.description_en || '',
             warranty_months: exData.warranty_months || targetObj.warranty_months || 12,
-            image_url: uploadedImageUrl,
+            image_url: state.productGalleryImages[0] || uploadedImageUrl,
+            images: [...state.productGalleryImages],
           };
           if (state.editingProduct) state.editingProduct = updated;
           else state.prefillProduct = updated;
+          state.webImageSearchQuery = [updated.brand, updated.model_number, updated.name_fr].filter(Boolean).join(' ').trim();
           state.internetLookupBanner = {
             ok: true,
             msg: `Extraction Vision (${String(exData.source || 'AI').toUpperCase()}) réussie depuis ${images.length} photo(s) !`,
           };
         } else {
-          if (uploadedImageUrl) {
-            if (state.editingProduct) state.editingProduct.image_url = uploadedImageUrl;
-            else state.prefillProduct = { ...(state.prefillProduct || {}), image_url: uploadedImageUrl };
-          }
           state.internetLookupBanner = {
             ok: false,
             msg: `Photo enregistrée. Note IA : ${exData.error || 'complétez manuellement.'}`,
@@ -3416,7 +4294,8 @@ function attachEvents() {
   const btnGenProPhoto = document.getElementById('btn-gen-pro-photo');
   if (btnGenProPhoto) {
     btnGenProPhoto.onclick = async () => {
-      const currentImgUrl = document.getElementById('prod-image-url')?.value || '';
+      syncProductFormDraftFromDom();
+      const currentImgUrl = state.productGalleryImages[0] || document.getElementById('prod-image-url')?.value || '';
       if (state.productBoxImages.length === 0 && !currentImgUrl) {
         document.getElementById('input-prod-photos-ai')?.click();
         return;
@@ -3432,16 +4311,16 @@ function attachEvents() {
             image_url: currentImgUrl,
             product_name: document.getElementById('prod-name-fr')?.value || '',
             brand: document.getElementById('prod-brand')?.value || '',
+            mode: state.productStudioMode || 'clean_crop',
           }),
         });
         const data = await res.json();
         state.productProPhotoLoading = false;
         if (res.ok && data.image_url) {
-          if (state.editingProduct) state.editingProduct.image_url = data.image_url;
-          else state.prefillProduct = { ...(state.prefillProduct || {}), image_url: data.image_url };
+          state.productGalleryImages = [data.image_url, ...state.productGalleryImages.filter((u) => u !== data.image_url)];
           state.internetLookupBanner = {
             ok: true,
-            msg: `Photo Pro Studio générée avec succès (${data.method === 'ai_studio_gen' ? 'IA Générative' : 'Détourage Vision Studio'}) !`,
+            msg: `Photo Studio créée (${data.method || state.productStudioMode}) et définie comme #1 Principale !`,
           };
         } else {
           state.internetLookupBanner = { ok: false, msg: data.error || 'Échec création photo studio.' };
@@ -3465,6 +4344,9 @@ function attachEvents() {
       state.productModalOpen = false;
       state.productModalExpanded = false;
       state.productBoxImages = [];
+      state.productGalleryImages = [];
+      state.webImageSearchOpen = false;
+      state.webImageSearchResults = [];
       state.prefillProduct = null;
       state.internetLookupBanner = null;
       render();
@@ -3487,6 +4369,7 @@ function attachEvents() {
         if (data.existsLocally && data.product) {
           state.editingProduct = data.product;
           state.prefillProduct = null;
+          state.productGalleryImages = getProductImages(data.product);
           state.internetLookupBanner = { ok: true, msg: `Produit déjà enregistré dans votre base locale (${data.product.name_fr}).` };
         } else {
           state.prefillProduct = {
@@ -3498,7 +4381,11 @@ function attachEvents() {
             name_ar: data.name_ar || '',
             name_en: data.name_en || '',
             description_fr: data.description_fr || data.specs_text || '',
+            image_url: data.image_url || '',
           };
+          if (data.image_url && !state.productGalleryImages.includes(data.image_url)) {
+            state.productGalleryImages.unshift(data.image_url);
+          }
           state.internetLookupBanner = { ok: true, msg: `Infos récupérées depuis ${data.source || 'Internet'} — vérifiez et complétez les prix.` };
         }
       } else {
@@ -3586,10 +4473,8 @@ function attachEvents() {
   const btnScanAddProd = document.getElementById('btn-scan-add-product');
   if (btnScanAddProd) {
     btnScanAddProd.onclick = () => {
-      state.editingProduct = null;
-      state.prefillProduct = { barcode: '' };
+      openProductModalWith({ barcode: '' }, false);
       state.internetLookupBanner = { ok: true, msg: 'Scannez le code-barres (douchette ou caméra) puis Entrée pour rechercher automatiquement sur Internet.' };
-      state.productModalOpen = true;
       render();
       setTimeout(() => document.getElementById('prod-barcode')?.focus(), 50);
     };
@@ -3600,9 +4485,7 @@ function attachEvents() {
     btnInspInternetCreate.onclick = async () => {
       const code = btnInspInternetCreate.getAttribute('data-code') || '';
       state.inspectorOpen = false;
-      state.editingProduct = null;
-      state.prefillProduct = { barcode: code };
-      state.productModalOpen = true;
+      openProductModalWith({ barcode: code }, false);
       render();
       await runInternetLookupInModal(code);
     };
@@ -3613,10 +4496,8 @@ function attachEvents() {
     btnInspManualCreate.onclick = () => {
       const code = btnInspManualCreate.getAttribute('data-code') || '';
       state.inspectorOpen = false;
-      state.editingProduct = null;
-      state.prefillProduct = { barcode: code };
+      openProductModalWith({ barcode: code }, false);
       state.internetLookupBanner = { ok: false, msg: 'Mode saisie manuelle — complétez les informations du produit.' };
-      state.productModalOpen = true;
       render();
     };
   }
@@ -3699,6 +4580,8 @@ function attachEvents() {
       e.preventDefault();
       const fd = new FormData(formProdModal);
       const payload = Object.fromEntries(fd.entries());
+      payload.images = [...(state.productGalleryImages || [])];
+      payload.image_url = payload.images[0] || '';
       if (!Number(payload.wholesale_price)) {
         payload.wholesale_price = payload.retail_price;
       }
@@ -3719,6 +4602,9 @@ function attachEvents() {
         state.cameraScanActive = false;
         state.productModalOpen = false;
         state.productModalExpanded = false;
+        state.productGalleryImages = [];
+        state.webImageSearchOpen = false;
+        state.webImageSearchResults = [];
         state.prefillProduct = null;
         state.internetLookupBanner = null;
         await loadAllData();
@@ -4475,7 +5361,7 @@ function attachEvents() {
     };
   });
   const btnDashAddProd = document.getElementById('btn-dash-add-product');
-  if (btnDashAddProd) btnDashAddProd.onclick = () => { state.editingProduct = null; state.productModalOpen = true; render(); };
+  if (btnDashAddProd) btnDashAddProd.onclick = () => { openProductModalWith(null, false); render(); };
 
   // POS Extras: Hold / Drafts / Calculator / Today Sales / % Discount / Create Devis
   const btnToggleDiscMode = document.getElementById('btn-toggle-disc-mode');
@@ -4705,6 +5591,7 @@ window.addEventListener('keydown', (e) => {
     if (
       state.inspectorOpen ||
       state.productModalOpen ||
+      state.picturesModalProduct ||
       state.printableSale ||
       state.barcodeLabelProduct ||
       state.quickCustomerModalOpen ||
@@ -4718,6 +5605,7 @@ window.addEventListener('keydown', (e) => {
     ) {
       state.inspectorOpen = false;
       state.productModalOpen = false;
+      state.picturesModalProduct = null;
       state.printableSale = null;
       state.barcodeLabelProduct = null;
       state.quickCustomerModalOpen = false;

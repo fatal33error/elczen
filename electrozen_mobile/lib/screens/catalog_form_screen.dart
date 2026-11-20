@@ -41,10 +41,20 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
   bool _enhancingAi = false;
   int? _editingId;
   String _imageUrl = '';
+  List<String> _galleryUrls = [];
+  String _studioMode = 'clean_crop';
   final ImagePicker _picker = ImagePicker();
   final List<Map<String, String>> _capturedBoxPhotos = [];
 
   bool get isShowingForm => _showForm;
+
+  void openProductEditor(Product? product, String? scannedBarcode, Map<String, dynamic>? internetPrefill) {
+    if (product != null) {
+      _populateForm(product);
+    } else if (scannedBarcode != null && scannedBarcode.isNotEmpty) {
+      _openNewWithBarcode(scannedBarcode, prefill: internetPrefill);
+    }
+  }
 
   bool handleBack() {
     if (_showForm) {
@@ -97,6 +107,18 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
       _openNewWithBarcode(widget.initialScannedBarcode!, prefill: widget.initialInternetPrefill);
     }
     _loadCatalog();
+  }
+
+  @override
+  void didUpdateWidget(covariant CatalogFormScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialEditProduct != null && widget.initialEditProduct != oldWidget.initialEditProduct) {
+      _populateForm(widget.initialEditProduct!);
+    } else if (widget.initialScannedBarcode != null &&
+        widget.initialScannedBarcode!.isNotEmpty &&
+        widget.initialScannedBarcode != oldWidget.initialScannedBarcode) {
+      _openNewWithBarcode(widget.initialScannedBarcode!, prefill: widget.initialInternetPrefill);
+    }
   }
 
   void _onSyncTriggered() {
@@ -152,11 +174,13 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
   }
 
   void _openNewWithBarcode(String barcode, {Map<String, dynamic>? prefill}) {
+    final preImg = (prefill?['image_url'] ?? '').toString().trim();
     setState(() {
       _showForm = true;
       _expandedDetails = false; // Quick Add Product by default
       _editingId = null;
-      _imageUrl = (prefill?['image_url'] ?? '').toString();
+      _imageUrl = preImg;
+      _galleryUrls = preImg.isNotEmpty ? [preImg] : [];
       _capturedBoxPhotos.clear();
       _barcodeCtrl.text = barcode;
       _skuCtrl.text = 'EZ-${DateTime.now().millisecondsSinceEpoch.toString().substring(8)}';
@@ -252,11 +276,16 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
   }
 
   void _populateForm(Product p) {
+    final imgs = <String>[
+      ...p.images.where((u) => u.trim().isNotEmpty),
+      if (p.imageUrl.trim().isNotEmpty && !p.images.contains(p.imageUrl.trim())) p.imageUrl.trim(),
+    ];
     setState(() {
       _showForm = true;
       _expandedDetails = false;
       _editingId = p.id;
-      _imageUrl = p.imageUrl;
+      _galleryUrls = imgs;
+      _imageUrl = imgs.isNotEmpty ? imgs.first : p.imageUrl;
       _capturedBoxPhotos.clear();
       _barcodeCtrl.text = p.barcode;
       _skuCtrl.text = p.sku;
@@ -277,6 +306,18 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
     });
   }
 
+  void _addUrlToGallery(String url, {bool makePrimary = false}) {
+    final clean = url.trim();
+    if (clean.isEmpty) return;
+    _galleryUrls.remove(clean);
+    if (makePrimary || _galleryUrls.isEmpty) {
+      _galleryUrls.insert(0, clean);
+    } else {
+      _galleryUrls.add(clean);
+    }
+    _imageUrl = _galleryUrls.isNotEmpty ? _galleryUrls.first : '';
+  }
+
   Future<void> _uploadProductPhoto(ImageSource source) async {
     try {
       final file = await _picker.pickImage(source: source, maxWidth: 1400, maxHeight: 1400, imageQuality: 85);
@@ -295,10 +336,10 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
       final uploadedUrl = await widget.api.uploadProductImage(b64, mimeType: mime);
       if (!mounted) return;
       setState(() {
-        _imageUrl = uploadedUrl;
+        _addUrlToGallery(uploadedUrl, makePrimary: _galleryUrls.isEmpty);
         _busyPhotoAi = false;
         _internetStatusOk = true;
-        _internetStatusMsg = 'Photo ajoutée ! Appuyez sur "Photo Pro Studio" pour générer le détourage sur fond blanc.';
+        _internetStatusMsg = 'Photo ajoutée à la galerie (#${_galleryUrls.length}) !';
       });
     } catch (e) {
       if (!mounted) return;
@@ -310,32 +351,34 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
     }
   }
 
-  Future<void> _generateProPhoto() async {
-    if (_capturedBoxPhotos.isEmpty && _imageUrl.isEmpty) {
+  Future<void> _generateProPhoto({String? targetUrl}) async {
+    final sourceUrl = (targetUrl ?? (_galleryUrls.isNotEmpty ? _galleryUrls.first : _imageUrl)).trim();
+    if (_capturedBoxPhotos.isEmpty && sourceUrl.isEmpty) {
       await _openMultiPhotoExtractorSheet();
       return;
     }
     setState(() {
       _busyPhotoAi = true;
       _internetStatusOk = true;
-      _internetStatusMsg = 'Génération de la photo produit studio sur fond blanc...';
+      _internetStatusMsg = 'Traitement Studio ($_studioMode) en cours...';
     });
     try {
       final res = await widget.api.generateProProductPhoto(
-        images: _capturedBoxPhotos,
-        imageUrl: _imageUrl,
+        images: targetUrl != null ? const [] : _capturedBoxPhotos,
+        imageUrl: sourceUrl,
         productName: _nameFrCtrl.text.trim(),
         brand: _brandCtrl.text.trim(),
+        mode: _studioMode,
       );
       if (!mounted) return;
       final newUrl = (res['image_url'] ?? '').toString();
       setState(() {
         _busyPhotoAi = false;
-        if (newUrl.isNotEmpty) _imageUrl = newUrl;
+        if (newUrl.isNotEmpty) {
+          _addUrlToGallery(newUrl, makePrimary: true);
+        }
         _internetStatusOk = true;
-        _internetStatusMsg = res['method'] == 'ai_studio_gen'
-            ? 'Photo Pro Studio générée par IA !'
-            : 'Photo Pro Studio détourée sur fond blanc avec succès !';
+        _internetStatusMsg = 'Photo Studio (${res['method'] ?? _studioMode}) créée et définie en #1 Principale !';
       });
     } catch (e) {
       if (!mounted) return;
@@ -345,6 +388,176 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
         _internetStatusMsg = e.toString().replaceFirst('Exception: ', '');
       });
     }
+  }
+
+  Future<void> _openWebImageSearchSheet({Product? directProduct}) async {
+    final initialQ = directProduct != null
+        ? [directProduct.brand, directProduct.modelNumber, directProduct.nameFr].where((s) => s.trim().isNotEmpty).join(' ')
+        : [_brandCtrl.text, _modelCtrl.text, _nameFrCtrl.text].where((s) => s.trim().isNotEmpty).join(' ');
+    final qCtrl = TextEditingController(text: initialQ.trim());
+    List<Map<String, dynamic>> results = [];
+    bool searching = initialQ.trim().isNotEmpty;
+    bool downloading = false;
+    bool didAutoSearch = false;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          Future<void> doSearch() async {
+            final q = qCtrl.text.trim();
+            if (q.isEmpty) return;
+            setSheetState(() => searching = true);
+            try {
+              final r = await widget.api.searchWebProductImages(q);
+              if (ctx.mounted) {
+                setSheetState(() {
+                  results = r;
+                  searching = false;
+                });
+              }
+            } catch (_) {
+              if (ctx.mounted) setSheetState(() => searching = false);
+            }
+          }
+
+          if (!didAutoSearch) {
+            didAutoSearch = true;
+            if (searching) {
+              Future.microtask(doSearch);
+            }
+          }
+
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.78,
+            minChildSize: 0.5,
+            maxChildSize: 0.94,
+            builder: (_, scrollCtrl) => SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 14, 16, MediaQuery.of(ctx).viewInsets.bottom + 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Chercher Photo Officielle Web', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                        IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: qCtrl,
+                            decoration: const InputDecoration(
+                              hintText: 'Marque + Modèle + Produit...',
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                            ),
+                            onSubmitted: (_) => doSearch(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF203361), foregroundColor: Colors.white),
+                          onPressed: searching ? null : doSearch,
+                          child: const Text('Chercher'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (searching || downloading) const LinearProgressIndicator(),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: results.isEmpty
+                          ? Center(
+                              child: Text(
+                                searching ? 'Recherche des photos constructeur...' : 'Saisissez la marque et le modèle puis appuyez sur Chercher.',
+                                style: const TextStyle(color: Color(0xFF667085), fontSize: 12.5),
+                                textAlign: TextAlign.center,
+                              ),
+                            )
+                          : GridView.builder(
+                              controller: scrollCtrl,
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 3,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                                childAspectRatio: 0.85,
+                              ),
+                              itemCount: results.length,
+                              itemBuilder: (_, i) {
+                                final item = results[i];
+                                final thumb = (item['thumb'] ?? item['url'] ?? '').toString();
+                                return InkWell(
+                                  onTap: downloading
+                                      ? null
+                                      : () async {
+                                          setSheetState(() => downloading = true);
+                                          try {
+                                            final localUrl = await widget.api.downloadWebProductImage(
+                                              (item['url'] ?? '').toString(),
+                                              thumb: thumb,
+                                            );
+                                            if (directProduct != null) {
+                                              final nextList = [localUrl, ...directProduct.images.where((u) => u != localUrl)];
+                                              await widget.api.updateProductImages(directProduct.id, nextList);
+                                              if (mounted) _loadCatalog();
+                                            } else if (mounted) {
+                                              setState(() {
+                                                _addUrlToGallery(localUrl, makePrimary: true);
+                                                _internetStatusOk = true;
+                                                _internetStatusMsg = 'Photo officielle ajoutée en #1 Principale !';
+                                              });
+                                            }
+                                            if (ctx.mounted) Navigator.pop(ctx);
+                                          } catch (e) {
+                                            setSheetState(() => downloading = false);
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(content: Text('Erreur image: $e')),
+                                              );
+                                            }
+                                          }
+                                        },
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      border: Border.all(color: const Color(0xFFD0D5DD)),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    padding: const EdgeInsets.all(4),
+                                    child: Column(
+                                      children: [
+                                        Expanded(
+                                          child: Image.network(
+                                            thumb,
+                                            fit: BoxFit.contain,
+                                            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Colors.grey),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 3),
+                                        const Text('+ Choisir', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Color(0xFF1D4ED8))),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    qCtrl.dispose();
   }
 
   Future<void> _openMultiPhotoExtractorSheet() async {
@@ -392,6 +605,7 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                     images: _capturedBoxPhotos,
                     productName: _nameFrCtrl.text.trim(),
                     brand: _brandCtrl.text.trim(),
+                    mode: _studioMode,
                   )
                   .catchError((_) => <String, dynamic>{});
 
@@ -401,11 +615,12 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
               if (!mounted) return;
               final proUrl = (proRes['image_url'] ?? '').toString();
               if (proUrl.isNotEmpty) {
-                _imageUrl = proUrl;
+                _addUrlToGallery(proUrl, makePrimary: true);
               } else if (_imageUrl.isEmpty) {
                 try {
                   final first = _capturedBoxPhotos.first;
-                  _imageUrl = await widget.api.uploadProductImage(first['imageBase64']!, mimeType: first['mimeType'] ?? 'image/jpeg');
+                  final up = await widget.api.uploadProductImage(first['imageBase64']!, mimeType: first['mimeType'] ?? 'image/jpeg');
+                  _addUrlToGallery(up, makePrimary: true);
                 } catch (_) {}
               }
               if (!mounted) return;
@@ -617,7 +832,8 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
       'description_ar': _descArCtrl.text.trim(),
       'description_en': _descEnCtrl.text.trim(),
       'specs_text': _specsCtrl.text.trim(),
-      'image_url': _imageUrl.trim(),
+      'image_url': (_galleryUrls.isNotEmpty ? _galleryUrls.first : _imageUrl).trim(),
+      'images': _galleryUrls,
       'current_cost_price': costVal,
       'last_cost_price': costVal,
       'wholesale_price': wholesaleVal,
@@ -701,7 +917,7 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                 ),
                 const SizedBox(height: 10),
 
-                // Product Image + Vision Box Photos Card
+                // Product Multi-Image Gallery + Web Image Finder + 4-Mode Photo Studio
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
@@ -713,50 +929,149 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Container(
-                            width: 58,
-                            height: 58,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: borderColor),
-                            ),
-                            child: _imageUrl.isNotEmpty
-                                ? ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Image.network(
-                                      _imageUrl.startsWith('http') ? _imageUrl : '${widget.api.baseUrl}$_imageUrl',
-                                      fit: BoxFit.contain,
-                                      errorBuilder: (_, __, ___) => const Icon(Icons.image_outlined, color: Colors.grey),
-                                    ),
-                                  )
-                                : const Icon(Icons.add_a_photo_outlined, color: Color(0xFF6D28D9)),
+                          Text(
+                            'Galerie Photos (${_galleryUrls.length}) • #1 Principale',
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: Color(0xFF5B21B6)),
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Photo Produit & Lecture Boîte IA',
-                                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: Color(0xFF5B21B6)),
-                                ),
-                                const SizedBox(height: 2),
-                                const Text(
-                                  'Ajoutez une image ou photographiez la boîte pour remplir marque, modèle et fiche.',
-                                  style: TextStyle(fontSize: 11, color: Color(0xFF667085)),
-                                ),
-                              ],
+                          if (_galleryUrls.isNotEmpty)
+                            Text(
+                              '★ = Couverture WooCommerce & POS',
+                              style: TextStyle(fontSize: 10.5, color: isDark ? const Color(0xFFC4B5FD) : const Color(0xFF667085)),
                             ),
-                          ),
                         ],
                       ),
+                      const SizedBox(height: 8),
+                      if (_galleryUrls.isEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            border: Border.all(color: borderColor),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text(
+                            'Aucune photo ajoutée. Cherchez une photo officielle Web, prenez une photo ou lisez la boîte.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 11.5, color: Color(0xFF667085)),
+                          ),
+                        )
+                      else
+                        SizedBox(
+                          height: 118,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _galleryUrls.length,
+                            separatorBuilder: (_, __) => const SizedBox(width: 8),
+                            itemBuilder: (_, idx) {
+                              final url = _galleryUrls[idx];
+                              final fullUrl = url.startsWith('http') ? url : '${widget.api.baseUrl}$url';
+                              return Container(
+                                width: 108,
+                                padding: const EdgeInsets.all(5),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: idx == 0 ? const Color(0xFF5B21B6) : borderColor,
+                                    width: idx == 0 ? 2 : 1,
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Expanded(
+                                      child: Stack(
+                                        children: [
+                                          Center(
+                                            child: Image.network(
+                                              fullUrl,
+                                              fit: BoxFit.contain,
+                                              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Colors.grey),
+                                            ),
+                                          ),
+                                          Positioned(
+                                            left: 0,
+                                            top: 0,
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                              decoration: BoxDecoration(
+                                                color: idx == 0 ? const Color(0xFF5B21B6) : const Color(0xFF64748B),
+                                                borderRadius: BorderRadius.circular(4),
+                                              ),
+                                              child: Text(
+                                                idx == 0 ? '★ #1' : '#${idx + 1}',
+                                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        InkWell(
+                                          onTap: idx == 0
+                                              ? null
+                                              : () => setState(() {
+                                                    final item = _galleryUrls.removeAt(idx);
+                                                    _galleryUrls.insert(idx - 1, item);
+                                                    _imageUrl = _galleryUrls.first;
+                                                  }),
+                                          child: Icon(Icons.chevron_left, size: 20, color: idx == 0 ? Colors.grey.shade300 : Colors.black87),
+                                        ),
+                                        InkWell(
+                                          onTap: idx == 0
+                                              ? null
+                                              : () => setState(() {
+                                                    final item = _galleryUrls.removeAt(idx);
+                                                    _galleryUrls.insert(0, item);
+                                                    _imageUrl = _galleryUrls.first;
+                                                  }),
+                                          child: Icon(Icons.star, size: 17, color: idx == 0 ? const Color(0xFF5B21B6) : Colors.amber.shade700),
+                                        ),
+                                        InkWell(
+                                          onTap: idx == _galleryUrls.length - 1
+                                              ? null
+                                              : () => setState(() {
+                                                    final item = _galleryUrls.removeAt(idx);
+                                                    _galleryUrls.insert(idx + 1, item);
+                                                    _imageUrl = _galleryUrls.first;
+                                                  }),
+                                          child: Icon(Icons.chevron_right, size: 20, color: idx == _galleryUrls.length - 1 ? Colors.grey.shade300 : Colors.black87),
+                                        ),
+                                        InkWell(
+                                          onTap: () => setState(() {
+                                            _galleryUrls.removeAt(idx);
+                                            _imageUrl = _galleryUrls.isNotEmpty ? _galleryUrls.first : '';
+                                          }),
+                                          child: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFE11D48)),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 6,
                         runSpacing: 6,
                         children: [
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF1D4ED8),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            ),
+                            onPressed: _busyPhotoAi ? null : () => _openWebImageSearchSheet(),
+                            icon: const Icon(Icons.image_search, size: 16),
+                            label: const Text('Photo Web Officielle', style: TextStyle(fontSize: 12)),
+                          ),
                           ElevatedButton.icon(
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF6D28D9),
@@ -765,17 +1080,7 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                             ),
                             onPressed: _busyPhotoAi ? null : _openMultiPhotoExtractorSheet,
                             icon: const Icon(Icons.auto_awesome, size: 16),
-                            label: const Text('Lire Photos Boîte (IA)', style: TextStyle(fontSize: 12)),
-                          ),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF1C61E7),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            ),
-                            onPressed: _busyPhotoAi ? null : _generateProPhoto,
-                            icon: const Icon(Icons.wallpaper_outlined, size: 16),
-                            label: const Text('Photo Pro Studio', style: TextStyle(fontSize: 12)),
+                            label: const Text('Lire Boîte (IA)', style: TextStyle(fontSize: 12)),
                           ),
                           OutlinedButton.icon(
                             style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
@@ -790,6 +1095,39 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                             label: const Text('Galerie', style: TextStyle(fontSize: 12)),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 8),
+                      // Studio Processing Modes Selector
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            for (final m in [
+                              ('clean_crop', '🖼️ Cadrage Studio'),
+                              ('white_cutout', '✂️ Détourage Blanc'),
+                              ('ai_render', '✨ Rendu IA 3D'),
+                            ])
+                              Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: ChoiceChip(
+                                  label: Text(m.$2, style: const TextStyle(fontSize: 11)),
+                                  selected: _studioMode == m.$1,
+                                  onSelected: (_) => setState(() => _studioMode = m.$1),
+                                ),
+                              ),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0F172A),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                minimumSize: const Size(0, 32),
+                              ),
+                              onPressed: _busyPhotoAi ? null : () => _generateProPhoto(),
+                              icon: const Icon(Icons.wallpaper_outlined, size: 15),
+                              label: const Text('Appliquer Studio', style: TextStyle(fontSize: 11.5)),
+                            ),
+                          ],
+                        ),
                       ),
                       if (_busyPhotoAi) ...[
                         const SizedBox(height: 8),
@@ -1239,6 +1577,16 @@ class CatalogFormScreenState extends State<CatalogFormScreen> {
                                       ),
                                     ),
                                     const SizedBox(width: 8),
+                                    OutlinedButton.icon(
+                                      style: OutlinedButton.styleFrom(
+                                        minimumSize: const Size(0, 34),
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                      ),
+                                      onPressed: () => _populateForm(p),
+                                      icon: const Icon(Icons.photo_library_outlined, size: 15),
+                                      label: Text('${p.images.length}', style: const TextStyle(fontSize: 12)),
+                                    ),
+                                    const SizedBox(width: 6),
                                     OutlinedButton(
                                       style: OutlinedButton.styleFrom(
                                         minimumSize: const Size(0, 34),

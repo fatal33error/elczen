@@ -834,20 +834,42 @@ class ScannerScreenState extends State<ScannerScreen> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     if (p.imageUrl.isNotEmpty) ...[
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          width: 72,
-                          height: 72,
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            border: Border.all(color: borderCol),
-                          ),
-                          child: Image.network(
-                            p.imageUrl.startsWith('http') ? p.imageUrl : '${widget.api.baseUrl}${p.imageUrl}',
-                            fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) => const Icon(Icons.image_not_supported_outlined, color: Colors.grey),
-                          ),
+                      InkWell(
+                        onTap: () => widget.onOpenProductForm(p, null),
+                        child: Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                width: 72,
+                                height: 72,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  border: Border.all(color: borderCol),
+                                ),
+                                child: Image.network(
+                                  p.imageUrl.startsWith('http') ? p.imageUrl : '${widget.api.baseUrl}${p.imageUrl}',
+                                  fit: BoxFit.contain,
+                                  errorBuilder: (_, __, ___) => const Icon(Icons.image_not_supported_outlined, color: Colors.grey),
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              right: 2,
+                              bottom: 2,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF4F46E5),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  '${p.images.length}',
+                                  style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -971,12 +993,12 @@ class ScannerScreenState extends State<ScannerScreen> {
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       onPressed: () => widget.onOpenProductForm(p, null),
-                      icon: const Icon(Icons.edit_outlined, size: 18),
-                      label: const Text('Modifier'),
+                      icon: const Icon(Icons.photo_library_outlined, size: 17),
+                      label: Text('Photos (${p.images.length})'),
                     ),
                   ],
                 ),

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class PriceHistoryEntry {
   final int id;
   final String supplierName;
@@ -79,6 +81,7 @@ class Product {
   final int minStockAlert;
   final int warrantyMonths;
   final String imageUrl;
+  final List<String> images;
   final String sourceSite;
   final List<PriceHistoryEntry> priceHistory;
   final List<SerialItem> availableSerials;
@@ -103,6 +106,7 @@ class Product {
     required this.minStockAlert,
     required this.warrantyMonths,
     this.imageUrl = '',
+    this.images = const [],
     this.sourceSite = 'electrozen.ma',
     this.priceHistory = const [],
     this.availableSerials = const [],
@@ -123,6 +127,28 @@ class Product {
   factory Product.fromJson(Map<String, dynamic> json) {
     final rawHistory = (json['price_history'] as List?) ?? const [];
     final rawSerials = (json['available_serials'] as List?) ?? const [];
+    final imgUrl = (json['image_url'] ?? '').toString().trim();
+    final List<String> parsedImgs = [];
+    final rawImgs = json['images'];
+    if (rawImgs is List) {
+      for (final x in rawImgs) {
+        final s = x.toString().trim();
+        if (s.isNotEmpty && !parsedImgs.contains(s)) parsedImgs.add(s);
+      }
+    } else if (json['images_json'] is String && (json['images_json'] as String).trim().isNotEmpty) {
+      try {
+        final dec = jsonDecode(json['images_json'] as String);
+        if (dec is List) {
+          for (final x in dec) {
+            final s = x.toString().trim();
+            if (s.isNotEmpty && !parsedImgs.contains(s)) parsedImgs.add(s);
+          }
+        }
+      } catch (_) {}
+    }
+    if (imgUrl.isNotEmpty && !parsedImgs.contains(imgUrl)) {
+      parsedImgs.insert(0, imgUrl);
+    }
     return Product(
       id: (json['id'] as num?)?.toInt() ?? 0,
       barcode: (json['barcode'] ?? '').toString(),
@@ -142,7 +168,8 @@ class Product {
       stockQuantity: (json['stock_quantity'] as num?)?.toInt() ?? 0,
       minStockAlert: (json['min_stock_alert'] as num?)?.toInt() ?? 2,
       warrantyMonths: (json['warranty_months'] as num?)?.toInt() ?? 12,
-      imageUrl: (json['image_url'] ?? '').toString(),
+      imageUrl: parsedImgs.isNotEmpty ? parsedImgs.first : imgUrl,
+      images: parsedImgs,
       sourceSite: (json['source_site'] ?? 'electrozen.ma').toString(),
       priceHistory: rawHistory
           .whereType<Map>()

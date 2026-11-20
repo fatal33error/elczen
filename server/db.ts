@@ -110,9 +110,12 @@ export function initDatabase() {
       warranty_months INTEGER NOT NULL DEFAULT 12,
       has_serial INTEGER NOT NULL DEFAULT 0,
       image_url TEXT DEFAULT '',
+      images_json TEXT DEFAULT '[]',
       woo_id INTEGER DEFAULT NULL,
+      woo_id_verified INTEGER DEFAULT 0,
       woo_sync_status TEXT NOT NULL DEFAULT 'pending',
       woo_last_synced TEXT DEFAULT NULL,
+      woo_last_error TEXT DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -412,6 +415,28 @@ export function initDatabase() {
   if (!pCols.includes('permalink')) {
     db.exec("ALTER TABLE products ADD COLUMN permalink TEXT DEFAULT ''");
   }
+  if (!pCols.includes('images_json')) {
+    db.exec("ALTER TABLE products ADD COLUMN images_json TEXT DEFAULT '[]'");
+  }
+  if (!pCols.includes('woo_last_error')) {
+    db.exec("ALTER TABLE products ADD COLUMN woo_last_error TEXT DEFAULT ''");
+  }
+  if (!pCols.includes('woo_id_verified')) {
+    db.exec("ALTER TABLE products ADD COLUMN woo_id_verified INTEGER DEFAULT 0");
+  }
+
+  // Backfill images_json from legacy image_url where empty
+  const rowsToBackfill = db
+    .prepare(
+      `SELECT id, image_url FROM products WHERE (images_json IS NULL OR images_json = '' OR images_json = '[]') AND image_url IS NOT NULL AND image_url != ''`
+    )
+    .all() as { id: number; image_url: string }[];
+  if (rowsToBackfill.length > 0) {
+    const updBackfill = db.prepare(`UPDATE products SET images_json = ? WHERE id = ?`);
+    for (const r of rowsToBackfill) {
+      updBackfill.run(JSON.stringify([r.image_url]), r.id);
+    }
+  }
 
   const sCols = (db.prepare('PRAGMA table_info(sales)').all() as { name: string }[]).map((c) => c.name);
   if (!sCols.includes('status')) {
@@ -464,6 +489,9 @@ function seedUsersAndFiscalSettings() {
     store_rc: '512840 (Casablanca)',
     store_patente: '34789210',
     tva_rate: '20',
+    woo_wp_user: '',
+    woo_wp_app_password: '',
+    woo_media_map_json: '{}',
   };
   const insSet = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(fiscalDefaults)) {
@@ -568,6 +596,9 @@ function seedInitialData() {
       woo_url: 'https://electrozen.ma',
       woo_consumer_key: '',
       woo_consumer_secret: '',
+      woo_wp_user: '',
+      woo_wp_app_password: '',
+      woo_media_map_json: '{}',
       woo_auto_sync: 'true',
       ai_provider: 'gemini',
       ai_api_key: '',

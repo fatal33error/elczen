@@ -145,6 +145,9 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
       _pendingInternetPrefill = internetPrefill;
       _selectedIndex = 1; // Jump to Stock & Products tab
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _catalogKey.currentState?.openProductEditor(product, scannedBarcode, internetPrefill);
+    });
   }
 
   @override

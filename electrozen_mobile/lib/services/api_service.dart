@@ -558,6 +558,7 @@ class ElectroZenApiService {
     String imageUrl = '',
     String productName = '',
     String brand = '',
+    String mode = 'clean_crop',
   }) async {
     final response = await _authorizedRequest(
       () => http
@@ -569,6 +570,7 @@ class ElectroZenApiService {
               'image_url': imageUrl,
               'product_name': productName,
               'brand': brand,
+              'mode': mode,
             }),
           )
           .timeout(const Duration(seconds: 38)),
@@ -578,6 +580,56 @@ class ElectroZenApiService {
       throw Exception(decoded['error'] ?? 'Erreur génération photo studio (HTTP ${response.statusCode})');
     }
     return decoded;
+  }
+
+  Future<List<Map<String, dynamic>>> searchWebProductImages(String query) async {
+    final uri = Uri.parse('$baseUrl/api/products/image-search').replace(
+      queryParameters: {'q': query.trim()},
+    );
+    final response = await _authorizedRequest(
+      () => http.get(uri, headers: _headers).timeout(const Duration(seconds: 15)),
+    );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(decoded['error'] ?? 'Erreur recherche photos web');
+    }
+    final list = (decoded['results'] as List?) ?? const [];
+    return list.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  Future<String> downloadWebProductImage(String url, {String thumb = ''}) async {
+    final response = await _authorizedRequest(
+      () => http
+          .post(
+            Uri.parse('$baseUrl/api/products/download-web-image'),
+            headers: _headers,
+            body: jsonEncode({'url': url, 'thumb': thumb}),
+          )
+          .timeout(const Duration(seconds: 18)),
+    );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(decoded['error'] ?? 'Impossible de télécharger cette image');
+    }
+    return (decoded['image_url'] ?? '').toString();
+  }
+
+  Future<Product> updateProductImages(int productId, List<String> images) async {
+    final response = await _authorizedRequest(
+      () => http
+          .put(
+            Uri.parse('$baseUrl/api/products/$productId/images'),
+            headers: _headers,
+            body: jsonEncode({'images': images}),
+          )
+          .timeout(const Duration(seconds: 8)),
+    );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(decoded['error'] ?? 'Erreur sauvegarde galerie photos');
+    }
+    syncRevision.value += 1;
+    return Product.fromJson(decoded);
   }
 
   Future<Map<String, dynamic>> scanSupplierInvoice({
