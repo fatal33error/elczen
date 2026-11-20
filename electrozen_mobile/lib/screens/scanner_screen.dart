@@ -349,6 +349,67 @@ class ScannerScreenState extends State<ScannerScreen> {
     );
   }
 
+  Widget _quickActionTile({
+    required IconData icon,
+    required Color accentColor,
+    required String title,
+    required String subtitle,
+    required Color subtleBg,
+    required Color borderCol,
+    required Color inkPrimary,
+    required Color inkMuted,
+    VoidCallback? onTap,
+  }) {
+    return Material(
+      color: subtleBg,
+      borderRadius: BorderRadius.circular(11),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(11),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 11),
+          decoration: BoxDecoration(
+            border: Border.all(color: borderCol),
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, size: 19, color: accentColor),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12.2, fontWeight: FontWeight.w800, color: inkPrimary),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 10, color: inkMuted),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildDashboardSection(
     bool isDark,
     Color cardBg,
@@ -418,6 +479,83 @@ class ScannerScreenState extends State<ScannerScreen> {
                     : Icon(Icons.refresh, size: 19, color: inkMuted),
                 tooltip: 'Actualiser les statistiques',
                 onPressed: _loadingDashboard ? null : _loadDashboardData,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // 2x2 Ergonomic Quick-Action Grid
+          Text(
+            'ACTIONS RAPIDES',
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+              color: inkMuted,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _quickActionTile(
+                  icon: Icons.add_box_outlined,
+                  accentColor: const Color(0xFF1C61E7),
+                  title: '+ Ajout Rapide',
+                  subtitle: 'Fiche ou photo IA',
+                  subtleBg: subtleBg,
+                  borderCol: borderCol,
+                  inkPrimary: inkPrimary,
+                  inkMuted: inkMuted,
+                  onTap: () => widget.onOpenProductForm(null, null),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _quickActionTile(
+                  icon: Icons.document_scanner_outlined,
+                  accentColor: const Color(0xFF059669),
+                  title: 'Facture Achat IA',
+                  subtitle: 'Scanner & stock',
+                  subtleBg: subtleBg,
+                  borderCol: borderCol,
+                  inkPrimary: inkPrimary,
+                  inkMuted: inkMuted,
+                  onTap: widget.onOpenInvoiceScanner,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _quickActionTile(
+                  icon: Icons.point_of_sale_outlined,
+                  accentColor: const Color(0xFF6D28D9),
+                  title: 'Caisse POS',
+                  subtitle: 'Encaisser & ticket',
+                  subtleBg: subtleBg,
+                  borderCol: borderCol,
+                  inkPrimary: inkPrimary,
+                  inkMuted: inkMuted,
+                  onTap: widget.onOpenPos,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _quickActionTile(
+                  icon: Icons.receipt_long_outlined,
+                  accentColor: const Color(0xFFD97706),
+                  title: 'Ventes & Garanties',
+                  subtitle: 'Historique & PDF',
+                  subtleBg: subtleBg,
+                  borderCol: borderCol,
+                  inkPrimary: inkPrimary,
+                  inkMuted: inkMuted,
+                  onTap: widget.onOpenSalesHistory,
+                ),
               ),
             ],
           ),
@@ -499,63 +637,6 @@ class ScannerScreenState extends State<ScannerScreen> {
                   onTap: widget.onOpenPos,
                 ),
               ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-
-          // Quick Action Shortcuts
-          Text(
-            'RACCOURCIS RAPIDES',
-            style: TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.5,
-              color: inkMuted,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ActionChip(
-                avatar: const Icon(Icons.add, size: 16, color: Color(0xFF1C61E7)),
-                label: const Text('Nouveau Produit'),
-                backgroundColor: subtleBg,
-                side: BorderSide(color: borderCol),
-                onPressed: () => widget.onOpenProductForm(null, null),
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.inventory_2_outlined, size: 16, color: Color(0xFF203361)),
-                label: const Text('Gérer le Stock'),
-                backgroundColor: subtleBg,
-                side: BorderSide(color: borderCol),
-                onPressed: widget.onOpenCatalog,
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.point_of_sale_outlined, size: 16, color: Color(0xFF6D28D9)),
-                label: const Text('Panier POS Mobile'),
-                backgroundColor: subtleBg,
-                side: BorderSide(color: borderCol),
-                onPressed: widget.onOpenPos,
-              ),
-              if (widget.onOpenInvoiceScanner != null)
-                ActionChip(
-                  avatar: const Icon(Icons.document_scanner_outlined, size: 16, color: Color(0xFF059669)),
-                  label: const Text('Scanner Facture Fournisseur'),
-                  backgroundColor: subtleBg,
-                  side: BorderSide(color: borderCol),
-                  onPressed: widget.onOpenInvoiceScanner,
-                ),
-              if (widget.onOpenSalesHistory != null)
-                ActionChip(
-                  avatar: const Icon(Icons.history, size: 16, color: Color(0xFFD97706)),
-                  label: const Text('Historique Ventes & Garanties'),
-                  backgroundColor: subtleBg,
-                  side: BorderSide(color: borderCol),
-                  onPressed: widget.onOpenSalesHistory,
-                ),
             ],
           ),
 

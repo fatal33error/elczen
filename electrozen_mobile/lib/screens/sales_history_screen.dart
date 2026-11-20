@@ -6,8 +6,13 @@ import '../services/print_service.dart';
 
 class SalesHistoryScreen extends StatefulWidget {
   final ElectroZenApiService api;
+  final bool embedded;
 
-  const SalesHistoryScreen({super.key, required this.api});
+  const SalesHistoryScreen({
+    super.key,
+    required this.api,
+    this.embedded = false,
+  });
 
   @override
   State<SalesHistoryScreen> createState() => _SalesHistoryScreenState();
@@ -24,14 +29,20 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
   final NumberFormat _madFmt = NumberFormat('#,##0.00', 'fr_FR');
   String _fmt(double v) => '${_madFmt.format(v)} MAD';
 
+  void _onSync() {
+    if (mounted) _loadData();
+  }
+
   @override
   void initState() {
     super.initState();
+    widget.api.syncRevision.addListener(_onSync);
     _loadData();
   }
 
   @override
   void dispose() {
+    widget.api.syncRevision.removeListener(_onSync);
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -120,26 +131,47 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     final list = _filteredSales;
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF203361),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text('Historique des Ventes & Garanties', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: 'Retour',
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Actualiser',
-            onPressed: _loadData,
-          ),
-        ],
-      ),
+      appBar: widget.embedded
+          ? null
+          : AppBar(
+              backgroundColor: const Color(0xFF203361),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              title: const Text('Historique des Ventes & Garanties', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Retour',
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  tooltip: 'Actualiser',
+                  onPressed: _loadData,
+                ),
+              ],
+            ),
       body: Column(
         children: [
+          if (widget.embedded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 8, 0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'HISTORIQUE DES VENTES & GARANTIES',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF667085), letterSpacing: 0.4),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 20),
+                    tooltip: 'Actualiser',
+                    onPressed: _loadData,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
+            ),
           Container(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
             color: cardBg,

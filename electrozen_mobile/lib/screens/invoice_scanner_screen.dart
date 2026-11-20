@@ -42,8 +42,15 @@ class _EditableInvoiceItem {
 
 class InvoiceScannerScreen extends StatefulWidget {
   final ElectroZenApiService api;
+  final bool embedded;
+  final VoidCallback? onCompleted;
 
-  const InvoiceScannerScreen({super.key, required this.api});
+  const InvoiceScannerScreen({
+    super.key,
+    required this.api,
+    this.embedded = false,
+    this.onCompleted,
+  });
 
   @override
   State<InvoiceScannerScreen> createState() => _InvoiceScannerScreenState();
@@ -235,7 +242,23 @@ class _InvoiceScannerScreenState extends State<InvoiceScannerScreen> {
           content: Text('Réception ${res["invoice_number"]} enregistrée ! Stock et tarifs mis à jour.'),
         ),
       );
-      Navigator.of(context).pop(true);
+      if (widget.embedded) {
+        setState(() {
+          for (final item in _items) {
+            item.dispose();
+          }
+          _items.clear();
+          _rawTextCtrl.clear();
+          _providerCtrl.clear();
+          _invoiceRefCtrl.clear();
+          _paidAmountCtrl.clear();
+          _matchedSupplierId = null;
+          _statusMsg = null;
+        });
+        widget.onCompleted?.call();
+      } else {
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _submitting = false);
@@ -250,19 +273,7 @@ class _InvoiceScannerScreenState extends State<InvoiceScannerScreen> {
     final subtleBg = isDark ? const Color(0xFF161F33) : const Color(0xFFF8FAFC);
     final borderCol = isDark ? const Color(0xFF1D2939) : const Color(0xFFE4E7EC);
 
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF203361),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text('Scanner Facture Fournisseur (IA)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: 'Retour',
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-      ),
-      body: ListView(
+    final Widget content = ListView(
         padding: const EdgeInsets.all(14),
         children: [
           Container(
@@ -522,7 +533,25 @@ class _InvoiceScannerScreenState extends State<InvoiceScannerScreen> {
             label: Text(_submitting ? 'Enregistrement...' : 'Valider Réception & Mettre à Jour Stock'),
           ),
         ],
+      );
+
+    if (widget.embedded) {
+      return content;
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF203361),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text('Scanner Facture Fournisseur (IA)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Retour',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
       ),
+      body: content,
     );
   }
 }

@@ -103,22 +103,6 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
     );
   }
 
-  void _openSalesHistory(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SalesHistoryScreen(api: widget.api),
-      ),
-    );
-  }
-
-  void _openInvoiceScanner(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => InvoiceScannerScreen(api: widget.api),
-      ),
-    );
-  }
-
   void _addToCart(Product p) {
     final existingIdx = _cart.indexWhere((c) => c.product.id == p.id);
     setState(() {
@@ -342,8 +326,8 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
                     onOpenPos: () => setState(() => _selectedIndex = 2),
                     onOpenCatalog: () => setState(() => _selectedIndex = 1),
                     onOpenPairing: () => _openPairingModal(homeContext),
-                    onOpenSalesHistory: () => _openSalesHistory(homeContext),
-                    onOpenInvoiceScanner: () => _openInvoiceScanner(homeContext),
+                    onOpenSalesHistory: () => setState(() => _selectedIndex = 4),
+                    onOpenInvoiceScanner: () => setState(() => _selectedIndex = 3),
                   ),
                   CatalogFormScreen(
                     key: _catalogKey,
@@ -357,7 +341,16 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
                     api: widget.api,
                     cart: _cart,
                     onCartUpdated: () => setState(() {}),
-                    onOpenSalesHistory: () => _openSalesHistory(homeContext),
+                    onOpenSalesHistory: () => setState(() => _selectedIndex = 4),
+                  ),
+                  InvoiceScannerScreen(
+                    api: widget.api,
+                    embedded: true,
+                    onCompleted: () => setState(() => _selectedIndex = 1),
+                  ),
+                  SalesHistoryScreen(
+                    api: widget.api,
+                    embedded: true,
                   ),
                 ],
               ),
@@ -371,8 +364,8 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
                   backgroundColor: _obsidianDark ? const Color(0xFF101828) : Colors.white,
                   selectedItemColor: _obsidianDark ? Colors.white : const Color(0xFF203361),
                   unselectedItemColor: const Color(0xFF667085),
-                  selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11.5),
-                  unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11),
+                  selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 10.5),
+                  unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 10),
                   onTap: (idx) {
                     setState(() {
                       if (idx != 1) {
@@ -385,11 +378,11 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
                   items: [
                     const BottomNavigationBarItem(
                       icon: Icon(Icons.qr_code_scanner, size: 20),
-                      label: 'Scanner & Prix',
+                      label: 'Accueil',
                     ),
                     const BottomNavigationBarItem(
                       icon: Icon(Icons.inventory_2_outlined, size: 20),
-                      label: 'Produits & Stock',
+                      label: 'Catalogue',
                     ),
                     BottomNavigationBarItem(
                       icon: Badge(
@@ -397,7 +390,15 @@ class _ElectroZenMobileAppState extends State<ElectroZenMobileApp> {
                         label: Text('${_cart.length}'),
                         child: const Icon(Icons.point_of_sale_outlined, size: 20),
                       ),
-                      label: 'POS Mobile',
+                      label: 'POS',
+                    ),
+                    const BottomNavigationBarItem(
+                      icon: Icon(Icons.document_scanner_outlined, size: 20),
+                      label: 'Factures IA',
+                    ),
+                    const BottomNavigationBarItem(
+                      icon: Icon(Icons.receipt_long_outlined, size: 20),
+                      label: 'Ventes',
                     ),
                   ],
                 ),

@@ -23,16 +23,16 @@ const ICONS = {
 
 const I18N = {
   fr: {
-    dashboard: 'Vue d’ensemble',
+    dashboard: 'Tableau de Bord & Caisse',
     pos: 'Caisse & Facturation',
-    sales: 'Historique Ventes',
-    products: 'Catalogue & Tarifs',
-    quotations: 'Devis & SAV Atelier',
-    purchases: 'Achats & Réceptions',
-    customers: 'Clients & Échéanciers',
+    sales: 'Ventes & Garanties',
+    products: 'Catalogue, Photos & Stock',
+    quotations: 'Devis & Atelier SAV',
+    purchases: 'Achats & Factures IA',
+    customers: 'Clients & Crédits',
     expenses: 'Charges & Trésorerie',
-    reports: 'Rapports P&L & Stock',
-    connect: 'Terminaux & WooCommerce',
+    reports: 'Rapports P&L & Marges',
+    connect: 'WooCommerce & Terminaux',
     quickScanBtn: 'Vérificateur de Prix',
     addProductBtn: 'Nouvel Article',
     syncWooBtn: 'Sync WooCommerce',
@@ -45,16 +45,16 @@ const I18N = {
     priceHistoryTitle: "Historique des Coûts d'Acquisition",
   },
   ar: {
-    dashboard: 'لوحة القيادة',
+    dashboard: 'لوحة القيادة والصندوق',
     pos: 'نقطة البيع والفوترة',
-    sales: 'سجل المبيعات',
-    products: 'المنتجات والأسعار',
+    sales: 'المبيعات والضمانات',
+    products: 'المنتجات، الصور والمخزون',
     quotations: 'عروض الأسعار والصيانة',
-    purchases: 'المشتريات والتموين',
-    customers: 'الزبائن والأقساط',
+    purchases: 'المشتريات وفواتير الذكاء',
+    customers: 'الزبائن والائتمان',
     expenses: 'المصاريف والخزينة',
     reports: 'التقارير والأرباح',
-    connect: 'ربط أندرويد وووكومرس',
+    connect: 'ووكومرس والأجهزة',
     quickScanBtn: 'كاشف الأسعار والباركود',
     addProductBtn: 'إضافة منتج',
     syncWooBtn: 'مزامنة المتجر',
@@ -67,16 +67,16 @@ const I18N = {
     priceHistoryTitle: 'سجل أسعار الشراء السابقة من الموردين',
   },
   en: {
-    dashboard: 'Overview',
+    dashboard: 'Dashboard & Cash',
     pos: 'Point of Sale',
-    sales: 'Sales History',
-    products: 'Catalog & Pricing',
+    sales: 'Sales & Warranties',
+    products: 'Catalog, Photos & Stock',
     quotations: 'Quotations & Repair',
-    purchases: 'Purchase Orders',
+    purchases: 'Purchases & AI Invoices',
     customers: 'Customers & Credit',
     expenses: 'Expenses & Cashflow',
-    reports: 'Profit & Stock Reports',
-    connect: 'Android & WooCommerce',
+    reports: 'Profit & Margins',
+    connect: 'WooCommerce & Devices',
     quickScanBtn: 'Price Lookup',
     addProductBtn: 'New Item',
     syncWooBtn: 'Sync WooCommerce',
@@ -98,6 +98,9 @@ const state = {
   pnlRange: '30d',
   quotationsSubTab: 'quotes',
   reportsSubTab: 'pnl',
+  productsSubTab: 'list', // 'list' | 'gallery' | 'adjustments'
+  productsFilterMode: 'all', // 'all' | 'low_stock' | 'no_photo' | 'woo_pending'
+  connectSubTab: 'woo', // 'woo' | 'android' | 'settings'
   dashboard: null,
   quotations: [],
   serviceJobs: [],
@@ -390,6 +393,9 @@ function renderLinearBarcodeSvg(code) {
 function getFilteredProducts() {
   return state.products.filter((p) => {
     if (state.selectedCategory !== 'ALL' && p.category !== state.selectedCategory) return false;
+    if (state.productsFilterMode === 'low_stock' && Number(p.stock_quantity || 0) > Number(p.min_stock_alert || 0)) return false;
+    if (state.productsFilterMode === 'no_photo' && getProductImages(p).length > 0) return false;
+    if (state.productsFilterMode === 'woo_pending' && p.woo_sync_status === 'synced') return false;
     if (!state.productSearch.trim()) return true;
     const q = state.productSearch.toLowerCase();
     return (
@@ -522,18 +528,41 @@ function render() {
     state.posPaidAmount === '' ? posTotal : Number(state.posPaidAmount);
   const posRemainingDebt = Math.max(0, posTotal - effectivePaid);
 
-  const navItems = [
-    { id: 'dashboard', label: t.dashboard, icon: ICONS.dashboard, count: '' },
-    { id: 'pos', label: t.pos, icon: ICONS.pos, count: state.posCart.length || '' },
-    { id: 'sales', label: t.sales, icon: ICONS.history, count: state.sales.length || '' },
-    { id: 'products', label: t.products, icon: ICONS.products, count: state.products.length },
-    { id: 'quotations', label: t.quotations, icon: ICONS.quotations, count: (state.dashboard?.openQuotationsCount || 0) + (state.dashboard?.serviceStats?.openJobs || 0) || '' },
-    { id: 'purchases', label: t.purchases, icon: ICONS.purchases, count: state.purchases.length || '' },
-    { id: 'customers', label: t.customers, icon: ICONS.customers, count: state.customers.length || '' },
-    { id: 'expenses', label: t.expenses, icon: ICONS.expenses, count: '' },
-    { id: 'reports', label: t.reports, icon: ICONS.reports, count: '' },
-    { id: 'connect', label: t.connect, icon: ICONS.connect, count: state.dashboard?.pendingWooSync || '' },
+  const customersWithDebtCount = state.customers.filter((c) => Number(c.total_debt || 0) > 0).length;
+  const openSavQuotes = (state.dashboard?.openQuotationsCount || 0) + (state.dashboard?.serviceStats?.openJobs || 0);
+  const navGroups = [
+    {
+      label: 'Comptoir & Ventes',
+      items: [
+        { id: 'pos', label: t.pos, icon: ICONS.pos, count: state.posCart.length || '', kbd: 'F1' },
+        { id: 'sales', label: t.sales, icon: ICONS.history, count: state.sales.length || '' },
+        { id: 'quotations', label: t.quotations, icon: ICONS.quotations, count: openSavQuotes || '' },
+        { id: 'customers', label: t.customers, icon: ICONS.customers, count: customersWithDebtCount || state.customers.length || '' },
+      ],
+    },
+    {
+      label: 'Stocks & Approvisionnement',
+      items: [
+        { id: 'products', label: t.products, icon: ICONS.products, count: state.products.length },
+        { id: 'purchases', label: t.purchases, icon: ICONS.purchases, count: state.purchases.length || '' },
+      ],
+    },
+    {
+      label: 'Pilotage & Finances',
+      items: [
+        { id: 'dashboard', label: t.dashboard, icon: ICONS.dashboard, count: '' },
+        { id: 'expenses', label: t.expenses, icon: ICONS.expenses, count: '' },
+        { id: 'reports', label: t.reports, icon: ICONS.reports, count: '' },
+      ],
+    },
+    {
+      label: 'Boutique Web & Système',
+      items: [
+        { id: 'connect', label: t.connect, icon: ICONS.connect, count: state.dashboard?.pendingWooSync || '' },
+      ],
+    },
   ];
+  const cashOpen = state.cashSession?.openSession;
 
   const isElectron = Boolean(window.electronAPI?.isElectron);
 
@@ -542,9 +571,9 @@ function render() {
     <div class="app-shell">
       ${state.toast ? `<div class="toast">${state.toast}</div>` : ''}
 
-      <!-- MATTE CARBON SIDEBAR -->
+      <!-- STRUCTURED BUSINESS GROUPED SIDEBAR -->
       <aside class="sidebar">
-        <div>
+        <div style="display:flex;flex-direction:column;min-height:0;flex:1">
           <div class="brand-header">
             <div class="brand-mark">
               <img src="/assets/electrozen-icon.png" alt="EZ" style="width:28px;height:28px;border-radius:5px;background:#fff;padding:2px;object-fit:contain" onerror="this.style.display='none'" />
@@ -559,7 +588,7 @@ function render() {
             </div>
           </div>
 
-          <button class="scan-trigger" id="btn-open-scanner" style="width:calc(100% - 28px)">
+          <button class="scan-trigger" id="btn-open-scanner" style="width:calc(100% - 28px);flex-shrink:0">
             <span style="display:flex;align-items:center;gap:8px">
               <span style="width:14px;height:14px;display:inline-flex">${ICONS.barcode}</span>
               <span>${t.quickScanBtn}</span>
@@ -567,31 +596,42 @@ function render() {
             <span class="kbd">F2</span>
           </button>
 
-          <div class="nav-section-label">Opérations</div>
-          <nav class="nav-list">
-            ${navItems
+          <div class="nav-scroll-region">
+            ${navGroups
               .map(
-                (item) => `
-              <button class="nav-btn ${state.activeTab === item.id ? 'active' : ''}" data-tab="${item.id}">
-                <span class="nav-btn-left">
-                  ${item.icon}
-                  <span>${item.label}</span>
-                </span>
-                ${item.count ? `<span class="nav-count">${item.count}</span>` : ''}
-              </button>
+                (grp) => `
+              <div class="nav-section-label">${grp.label}</div>
+              <nav class="nav-list">
+                ${grp.items
+                  .map(
+                    (item) => `
+                  <button class="nav-btn ${state.activeTab === item.id ? 'active' : ''}" data-tab="${item.id}">
+                    <span class="nav-btn-left">
+                      ${item.icon}
+                      <span>${item.label}</span>
+                    </span>
+                    <span style="display:flex;align-items:center;gap:4px">
+                      ${item.kbd ? `<span class="nav-shortcut">${item.kbd}</span>` : ''}
+                      ${item.count ? `<span class="nav-count">${item.count}</span>` : ''}
+                    </span>
+                  </button>
+                `
+                  )
+                  .join('')}
+              </nav>
             `
               )
               .join('')}
-          </nav>
+          </div>
         </div>
 
-        <div style="padding:14px;border-top:1px solid var(--sidebar-border);display:flex;flex-direction:column;gap:10px">
-          <div style="padding:10px 12px;background:var(--primary-4);border:1px solid var(--primary-3);border-radius:9px">
-            <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--primary-2);font-weight:600">
+        <div style="padding:12px;border-top:1px solid var(--sidebar-border);display:flex;flex-direction:column;gap:8px;flex-shrink:0">
+          <div style="padding:8px 10px;background:var(--primary-4);border:1px solid var(--primary-3);border-radius:9px">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:var(--primary-2);font-weight:600">
               <span>Serveur Wi-Fi Android</span>
               <span style="color:var(--primary-green);font-weight:800;font-size:10px">ACTIF</span>
             </div>
-            <div class="mono" style="font-size:11.5px;color:var(--primary);font-weight:700;margin-top:3px">
+            <div class="mono" style="font-size:11px;color:var(--primary);font-weight:700;margin-top:2px">
               ${state.networkInfo?.primaryIp || '127.0.0.1'}:${state.networkInfo?.port || 4000}
             </div>
           </div>
@@ -600,7 +640,7 @@ function render() {
             ${['fr', 'ar', 'en']
               .map(
                 (l) => `
-              <button data-lang="${l}" style="border:none;border-radius:6px;padding:5px 0;font-size:11px;font-weight:700;cursor:pointer;background:${state.lang === l ? 'var(--primary)' : 'transparent'};color:${state.lang === l ? '#ffffff' : 'var(--primary-2)'}">
+              <button data-lang="${l}" style="border:none;border-radius:6px;padding:4px 0;font-size:11px;font-weight:700;cursor:pointer;background:${state.lang === l ? 'var(--primary)' : 'transparent'};color:${state.lang === l ? '#ffffff' : 'var(--primary-2)'}">
                 ${l === 'ar' ? 'عربي' : l.toUpperCase()}
               </button>
             `
@@ -617,30 +657,29 @@ function render() {
             <span>${t[state.activeTab] || ''}</span>
             <span style="color:var(--border-strong)">/</span>
             <span class="topbar-subtitle">${state.settings.store_name || ''}</span>
+            <button type="button" class="btn btn-sm" id="btn-cash-topbar" style="margin-inline-start:8px;border-radius:999px;font-size:11px;padding:3px 10px;border-color:${cashOpen ? 'rgba(57,174,82,0.4)' : 'rgba(217,119,6,0.4)'};background:${cashOpen ? 'rgba(57,174,82,0.1)' : 'rgba(217,119,6,0.1)'};color:${cashOpen ? '#15803d' : '#b45309'}" title="Cliquer pour ouvrir / clôturer la caisse">
+              ${cashOpen ? `Caisse Ouverte (${fmtMoney(cashOpen.expected_cash)})` : 'Caisse Fermée • Ouvrir'}
+            </button>
           </div>
           <div class="topbar-actions">
+            <button class="btn" id="btn-open-scanner-top" title="Vérificateur de Prix & Stock (F2)">
+              ${ICONS.barcode}
+              <span>Prix (F2)</span>
+            </button>
+            <button class="btn btn-dark" id="btn-new-product">
+              ${ICONS.plus}
+              <span>${t.addProductBtn}</span>
+            </button>
+            <button class="btn" id="btn-sync-woo">
+              ${ICONS.sync}
+              <span>${t.syncWooBtn}${state.dashboard?.pendingWooSync ? ` (${state.dashboard.pendingWooSync})` : ''}</span>
+            </button>
             <button class="btn" id="btn-open-pin" title="Changer d'opérateur (Admin / Caissier)">
               <span class="tag ${state.currentUser?.role === 'admin' ? 'tag-ok' : 'tag-warn'}" style="padding:1px 6px">${(state.currentUser?.role || 'admin').toUpperCase()}</span>
               <span>${state.currentUser?.full_name || 'Admin'}</span>
             </button>
             <button class="btn" id="btn-toggle-theme" title="Basculer Clair / Sombre">
               <span>${state.theme === 'dark' ? 'Clair' : 'Sombre'}</span>
-            </button>
-            <button class="btn" id="btn-export-csv" title="Exporter le catalogue vers Excel (CSV)">
-              ${ICONS.download}
-              <span>CSV</span>
-            </button>
-            <button class="btn" id="btn-backup-db" title="Sauvegarder la base SQLite">
-              ${ICONS.download}
-              <span>Backup</span>
-            </button>
-            <button class="btn" id="btn-sync-woo">
-              ${ICONS.sync}
-              <span>${t.syncWooBtn}${state.dashboard?.pendingWooSync ? ` (${state.dashboard.pendingWooSync})` : ''}</span>
-            </button>
-            <button class="btn btn-dark" id="btn-new-product">
-              ${ICONS.plus}
-              <span>${t.addProductBtn}</span>
             </button>
           </div>
         </header>
@@ -1434,45 +1473,165 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
     `;
   }
 
-  // 3. PRODUCTS & PRICE HISTORY CATALOG
+  // 3. PRODUCTS, PHOTOS STUDIO & STOCK MANAGEMENT
   if (state.activeTab === 'products') {
+    const lowStockCnt = state.products.filter((x) => Number(x.stock_quantity || 0) <= Number(x.min_stock_alert || 0)).length;
+    const noPhotoCnt = state.products.filter((x) => getProductImages(x).length === 0).length;
+    const wooPendingCnt = state.products.filter((x) => x.woo_sync_status !== 'synced').length;
+
     return `
       <div style="display:flex;flex-direction:column;gap:14px">
-        <div class="panel">
-          <div class="panel-body" style="padding:12px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-            <input class="input" id="input-prod-search" placeholder="Filtrer par code-barres, modèle, marque ou désignation..." value="${state.productSearch}" style="flex:1;min-width:240px" />
-            <select class="input" id="select-prod-cat" style="width:230px">
-              ${categories
-                .map(
-                  (c) => `<option value="${c}" ${state.selectedCategory === c ? 'selected' : ''}>${c === 'ALL' ? 'Toutes les familles' : c}</option>`
-                )
-                .join('')}
-            </select>
-            <button type="button" class="btn btn-dark" id="btn-scan-add-product">${ICONS.barcode}<span>Scanner Code-Barres & Ajouter</span></button>
+        <!-- Sub-tabs & Quick Actions Bar -->
+        <div class="subtab-bar" style="justify-content:space-between">
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" class="subtab-btn ${state.productsSubTab === 'list' ? 'active' : ''}" data-psub="list">
+              ${ICONS.products}<span>Catalogue & Tarifs (${state.products.length})</span>
+            </button>
+            <button type="button" class="subtab-btn ${state.productsSubTab === 'gallery' ? 'active' : ''}" data-psub="gallery">
+              ${ICONS.image}<span>Studio & Galerie Photos</span>
+            </button>
+            <button type="button" class="subtab-btn ${state.productsSubTab === 'adjustments' ? 'active' : ''}" data-psub="adjustments">
+              ${ICONS.edit}<span>Ajustements Stock & Casse (${state.stockAdjustments.length})</span>
+            </button>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" class="btn btn-sm" id="btn-export-csv" title="Exporter vers Excel CSV">${ICONS.download}<span>Exporter CSV</span></button>
+            <label class="btn btn-sm" style="cursor:pointer;margin:0">
+              ${ICONS.plus}<span>Importer CSV</span>
+              <input type="file" id="input-import-csv" accept=".csv,.txt" style="display:none" />
+            </label>
+            <button type="button" class="btn btn-sm btn-dark" id="btn-scan-add-product">${ICONS.barcode}<span>Scanner & Ajouter</span></button>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Code-Barres / Réf</th>
-                  <th>Désignation</th>
-                  <th style="text-align:end">${t.currentBuyingPrice}</th>
-                  <th style="text-align:end">${t.wholesalePrice}</th>
-                  <th style="text-align:end">${t.retailPrice}</th>
-                  <th style="text-align:center">Stock</th>
-                  <th>Sync Web</th>
-                  <th style="text-align:end">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="products-catalog-tbody">
-                ${renderCatalogRows(filteredProducts)}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        ${
+          state.productsSubTab !== 'adjustments'
+            ? `<div class="panel">
+                <div class="panel-body" style="padding:12px 16px;display:flex;flex-direction:column;gap:10px">
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                    <input class="input" id="input-prod-search" placeholder="Filtrer par code-barres, modèle, marque ou désignation..." value="${state.productSearch}" style="flex:1;min-width:240px" />
+                    <select class="input" id="select-prod-cat" style="width:230px">
+                      ${categories
+                        .map(
+                          (c) => `<option value="${c}" ${state.selectedCategory === c ? 'selected' : ''}>${c === 'ALL' ? 'Toutes les familles' : c}</option>`
+                        )
+                        .join('')}
+                    </select>
+                  </div>
+                  <div class="segmented" style="align-self:flex-start;flex-wrap:wrap">
+                    <button type="button" class="seg-btn ${state.productsFilterMode === 'all' ? 'active' : ''}" data-prod-filter="all">Tous (${state.products.length})</button>
+                    <button type="button" class="seg-btn ${state.productsFilterMode === 'low_stock' ? 'active' : ''}" data-prod-filter="low_stock">Stock Critique (${lowStockCnt})</button>
+                    <button type="button" class="seg-btn ${state.productsFilterMode === 'no_photo' ? 'active' : ''}" data-prod-filter="no_photo">Sans Photo (${noPhotoCnt})</button>
+                    <button type="button" class="seg-btn ${state.productsFilterMode === 'woo_pending' ? 'active' : ''}" data-prod-filter="woo_pending">À Sync Woo (${wooPendingCnt})</button>
+                  </div>
+                </div>
+              </div>`
+            : ''
+        }
+
+        ${
+          state.productsSubTab === 'adjustments'
+            ? `<div class="grid-2" style="align-items:start">
+                <div class="panel">
+                  <div class="panel-header"><span class="panel-title">Nouvel Ajustement / Casse Stock</span></div>
+                  <form id="form-stock-adj" class="panel-body" style="display:flex;flex-direction:column;gap:10px">
+                    <div>
+                      <label class="field-label">Produit *</label>
+                      <select name="product_id" required class="input" style="text-overflow:ellipsis">
+                        ${state.products.map((p) => { const n = getProdName(p); return `<option value="${p.id}">${p.brand} — ${n.length > 52 ? n.slice(0, 52) + '…' : n} (${p.stock_quantity} u.)</option>`; }).join('')}
+                      </select>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                      <div>
+                        <label class="field-label">Type de Mouvement</label>
+                        <select name="adj_type" class="input">
+                          <option value="add">Correction (+) Entrée Inventaire</option>
+                          <option value="sub">Correction (-) Écart Inventaire</option>
+                          <option value="damage">Casse / Produit Endommagé (-)</option>
+                        </select>
+                      </div>
+                      <div><label class="field-label">Quantité *</label><input name="quantity" type="number" min="1" required value="1" class="input mono" /></div>
+                    </div>
+                    <div><label class="field-label">Motif / Observation</label><input name="reason" class="input" placeholder="Ex: Inventaire physique, appareil abîmé..." /></div>
+                    <button type="submit" class="btn btn-dark" style="justify-content:center">Valider Mouvement Stock</button>
+                  </form>
+                </div>
+                <div class="panel">
+                  <div class="panel-header"><span class="panel-title">Journal des Ajustements Stock</span></div>
+                  <div class="table-wrap">
+                    <table>
+                      <thead><tr><th>N° Pièce</th><th>Article</th><th>Variation</th><th>Motif</th></tr></thead>
+                      <tbody>
+                        ${state.stockAdjustments
+                          .map(
+                            (a) => `<tr>
+                              <td class="mono" style="font-size:11.5px;font-weight:700">${a.adj_number}<div style="font-size:10px;color:var(--ink-400)">${String(a.created_at || '').slice(0, 10)}</div></td>
+                              <td style="font-size:12px;font-weight:600">${a.product_name}</td>
+                              <td><span class="tag ${a.quantity_delta > 0 ? 'tag-ok' : 'tag-danger'} mono">${a.quantity_delta > 0 ? '+' : ''}${a.quantity_delta} (${a.stock_before} → ${a.stock_after})</span></td>
+                              <td style="font-size:11.5px;color:var(--ink-500)">${a.adj_type === 'damage' ? 'Casse: ' : ''}${a.reason || '—'}</td>
+                            </tr>`
+                          )
+                          .join('') || '<tr><td colspan="4" style="color:var(--ink-400);text-align:center;padding:24px">Aucun ajustement manuel enregistré.</td></tr>'}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>`
+            : state.productsSubTab === 'gallery'
+              ? `<div class="gallery-card-grid">
+                  ${
+                    filteredProducts.length === 0
+                      ? `<div class="panel" style="grid-column:1 / -1;padding:32px;text-align:center;color:var(--ink-400)">Aucun article dans ce filtre.</div>`
+                      : filteredProducts
+                          .slice(0, 80)
+                          .map((p) => {
+                            const imgs = getProductImages(p);
+                            return `
+                              <div class="panel" style="padding:12px;display:flex;flex-direction:column;justify-content:space-between;gap:10px">
+                                <div>
+                                  <div class="btn-open-pictures" data-id="${p.id}" style="position:relative;height:145px;background:#fff;border:1px solid var(--border);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:8px">
+                                    ${
+                                      imgs[0]
+                                        ? `<img src="${imgs[0]}" style="max-width:100%;max-height:128px;object-fit:contain" loading="lazy" />`
+                                        : `<div style="color:var(--ink-400);font-size:11px;text-align:center">Aucune photo</div>`
+                                    }
+                                    <span style="position:absolute;top:6px;left:6px;background:${imgs.length > 0 ? '#4f46e5' : '#e21b1b'};color:#fff;font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:999px">${imgs.length} photo${imgs.length > 1 ? 's' : ''}</span>
+                                  </div>
+                                  <div style="margin-top:8px;font-weight:700;font-size:12.5px;color:var(--ink-900);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${getProdName(p)}</div>
+                                  <div class="mono" style="font-size:10.5px;color:var(--ink-400);margin-top:2px">${p.brand} • ${p.model_number || p.sku}</div>
+                                </div>
+                                <div style="display:flex;gap:6px">
+                                  <button type="button" class="btn btn-sm btn-dark btn-open-pictures" data-id="${p.id}" style="flex:1;justify-content:center">${ICONS.image}<span>Gérer</span></button>
+                                  <button type="button" class="btn btn-sm btn-open-pictures" data-id="${p.id}" data-web="1" title="Photo Web Officielle">${ICONS.search}<span>Web</span></button>
+                                </div>
+                              </div>
+                            `;
+                          })
+                          .join('')
+                  }
+                </div>`
+              : `<div class="panel">
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Code-Barres / Réf</th>
+                          <th>Désignation</th>
+                          <th style="text-align:end">${t.currentBuyingPrice}</th>
+                          <th style="text-align:end">${t.wholesalePrice}</th>
+                          <th style="text-align:end">${t.retailPrice}</th>
+                          <th style="text-align:center">Stock</th>
+                          <th>Sync Web</th>
+                          <th style="text-align:end">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody id="products-catalog-tbody">
+                        ${renderCatalogRows(filteredProducts)}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>`
+        }
       </div>
     `;
   }
@@ -1930,327 +2089,355 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
     `;
   }
 
-  // 7. ANDROID WI-FI PAIRING & WOOCOMMERCE SETTINGS
+  // 7. WOOCOMMERCE, ANDROID WI-FI PAIRING & STORE SETTINGS (3 SUB-TABS)
   if (state.activeTab === 'connect') {
     const qrSvg = renderPairingQrSvg(state.networkInfo?.qrPayload || 'ELECTROZEN-POS-2026');
+    const csub = state.connectSubTab || 'woo';
+    const pendingWooCnt = state.products.filter((x) => x.woo_sync_status !== 'synced').length;
+
     return `
-      <div class="grid-2">
-        <div class="panel">
-          <div class="panel-header">
-            <span class="panel-title">Serveur Local Wi-Fi (Application Android)</span>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="subtab-bar" style="justify-content:space-between">
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" class="subtab-btn ${csub === 'woo' ? 'active' : ''}" data-csub="woo">
+              ${ICONS.sync}<span>1. Boutique WooCommerce & Photos (${pendingWooCnt})</span>
+            </button>
+            <button type="button" class="subtab-btn ${csub === 'android' ? 'active' : ''}" data-csub="android">
+              ${ICONS.connect}<span>2. Terminaux Android Wi-Fi (${(state.networkInfo?.pairedDevices || []).length})</span>
+            </button>
+            <button type="button" class="subtab-btn ${csub === 'settings' ? 'active' : ''}" data-csub="settings">
+              ${ICONS.edit}<span>3. Enseigne, IA & Sauvegardes</span>
+            </button>
           </div>
-          <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
-            <div style="display:flex;gap:16px;align-items:center;padding:12px;background:#fafafa;border:1px solid #e4e4e7;border-radius:6px">
-              ${qrSvg}
-              <div style="display:flex;flex-direction:column;gap:6px">
-                <div>
-                  <span class="field-label">Hôte Local (Même réseau Wi-Fi)</span>
-                  <div class="mono" style="font-size:14px;font-weight:700;color:#09090b">
-                    http://${state.networkInfo?.primaryIp || '127.0.0.1'}:${state.networkInfo?.port || 4000}
-                  </div>
-                </div>
-                <div>
-                  <span class="field-label">Clé d'appairage</span>
-                  <div class="mono" style="font-weight:600;color:#52525b">${state.networkInfo?.pairingToken || 'ELECTROZEN-POS-2026'}</div>
-                </div>
-                <div>
-                  <span class="field-label">App Mobile Directe (Wi-Fi PWA & Flutter API)</span>
-                  <div class="mono" style="font-size:12px;font-weight:700;color:#09090b">
-                    http://${state.networkInfo?.primaryIp || '127.0.0.1'}:${state.networkInfo?.port || 4000}/mobile
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <a href="/download/ELECTROZEN-Android.apk" class="btn btn-pos" style="text-decoration:none">
-                ${ICONS.download}
-                <span>Télécharger APK Android (ELECTROZEN-Android.apk)</span>
-              </a>
-              <button class="btn btn-dark" id="btn-sim-android-pair">Tester Appairage Terminal Android</button>
-              <button class="btn" id="btn-sim-android-scan">Simuler Scan Code-Barres Android</button>
-              <a href="/mobile" target="_blank" class="btn" style="text-decoration:none">Ouvrir l'App Mobile ELECTROZEN (/mobile)</a>
-            </div>
-
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Terminal Mobile</th>
-                    <th>Dernière Activité</th>
-                    <th style="text-align:end">État</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${(state.networkInfo?.pairedDevices || [])
-                    .map(
-                      (d) => `
-                    <tr>
-                      <td style="font-weight:600;color:#09090b">${d.device_name}</td>
-                      <td class="mono" style="font-size:11.5px;color:#71717a">${d.last_seen.slice(0, 16)}</td>
-                      <td style="text-align:end"><span class="tag tag-ok">En ligne</span></td>
-                    </tr>
-                  `
-                    )
-                    .join('')}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <button type="button" class="btn btn-sm" id="btn-backup-db">${ICONS.download}<span>Backup SQLite</span></button>
         </div>
 
-        <div class="panel">
-          <div class="panel-header">
-            <span class="panel-title">Paramètres Enseigne, Devise & WooCommerce REST API</span>
-          </div>
-          <form id="form-save-settings" class="panel-body" style="display:flex;flex-direction:column;gap:12px">
-            <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
-              <div>
-                <label class="field-label">Raison Sociale / Nom du Magasin</label>
-                <input name="store_name" class="input" value="${state.settings.store_name || ''}" />
-              </div>
-              <div>
-                <label class="field-label">Devise</label>
-                <input name="currency" class="input mono" value="${state.settings.currency || 'MAD'}" />
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-              <div>
-                <label class="field-label">Téléphone Magasin</label>
-                <input name="store_phone" class="input mono" value="${state.settings.store_phone || ''}" />
-              </div>
-              <div>
-                <label class="field-label">Adresse Magasin</label>
-                <input name="store_address" class="input" value="${state.settings.store_address || ''}" />
-              </div>
-            </div>
-            <div>
-              <label class="field-label">URL Site WooCommerce / WordPress</label>
-              <input name="woo_url" class="input mono" value="${state.settings.woo_url || ''}" />
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-              <div>
-                <label class="field-label">ICE Entreprise (Maroc)</label>
-                <input name="store_ice" class="input mono" value="${state.settings.store_ice || ''}" />
-              </div>
-              <div>
-                <label class="field-label">Identifiant Fiscal (IF)</label>
-                <input name="store_if" class="input mono" value="${state.settings.store_if || ''}" />
-              </div>
-              <div>
-                <label class="field-label">RC / Patente / TVA %</label>
-                <input name="store_rc" class="input mono" value="${state.settings.store_rc || ''}" />
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-              <div>
-                <label class="field-label">Consumer Key (ck_...)</label>
-                <input name="woo_consumer_key" type="password" class="input mono" value="${state.settings.woo_consumer_key || ''}" />
-              </div>
-              <div>
-                <label class="field-label">Consumer Secret (cs_...)</label>
-                <input name="woo_consumer_secret" type="password" class="input mono" value="${state.settings.woo_consumer_secret || ''}" />
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-              <div>
-                <label class="field-label">Utilisateur WordPress (Upload Médias)</label>
-                <input name="woo_wp_user" class="input mono" placeholder="Optionnel (ex: admin)" value="${state.settings.woo_wp_user || ''}" />
-              </div>
-              <div>
-                <label class="field-label">Mot de passe d'application WP (Médias)</label>
-                <input name="woo_wp_app_password" type="password" class="input mono" placeholder="Optionnel (pour photos caméra locales)" value="${state.settings.woo_wp_app_password || ''}" />
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:10px">
-              <div>
-                <label class="field-label">Fournisseur IA</label>
-                <select name="ai_provider" class="input">
-                  <option value="deepseek" ${(state.settings.ai_provider || 'gemini') === 'deepseek' ? 'selected' : ''}>DeepSeek API (deepseek-chat)</option>
-                  <option value="gemini" ${(state.settings.ai_provider || 'gemini') === 'gemini' ? 'selected' : ''}>Google Gemini (2.5 Flash)</option>
-                  <option value="openai" ${(state.settings.ai_provider || 'gemini') === 'openai' ? 'selected' : ''}>OpenAI (gpt-4o-mini)</option>
-                </select>
-              </div>
-              <div>
-                <label class="field-label">Clé API IA (DeepSeek / Gemini / OpenAI)</label>
-                <input name="ai_api_key" type="password" class="input mono" placeholder="sk-... ou AIza..." value="${state.settings.ai_api_key || ''}" />
-              </div>
-            </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button type="submit" class="btn btn-dark" style="flex:1;justify-content:center">Enregistrer les Paramètres</button>
-              <button type="button" class="btn btn-primary" id="btn-test-woo" ${state.wooTestLoading ? 'disabled' : ''}>
-                ${state.wooTestLoading ? 'Test en cours...' : 'Tester Connexion WooCommerce'}
-              </button>
-            </div>
-            ${
-              state.wooTestStatus
-                ? `<div style="padding:10px 12px;border-radius:8px;font-size:12px;background:${state.wooTestStatus.wc_connected ? 'rgba(57,174,82,0.1)' : 'rgba(226,27,27,0.08)'};border:1px solid ${state.wooTestStatus.wc_connected ? 'rgba(57,174,82,0.35)' : 'rgba(226,27,27,0.3)'};color:${state.wooTestStatus.wc_connected ? '#166534' : '#991b1b'}">
-                    <div style="font-weight:700">${state.wooTestStatus.wc_connected ? state.wooTestStatus.message : `Échec connexion WooCommerce : ${state.wooTestStatus.error}`}</div>
-                    ${state.wooTestStatus.wp_media_message ? `<div style="font-size:11px;margin-top:4px;opacity:0.9">${state.wooTestStatus.wp_media_message}</div>` : ''}
-                  </div>`
-                : ''
-            }
-          </form>
-        </div>
+        ${
+          csub === 'woo'
+            ? `<div style="display:flex;flex-direction:column;gap:16px">
+                <div class="panel">
+                  <div class="panel-header">
+                    <span class="panel-title">Connexion REST API WooCommerce & Médias WordPress (${state.settings.woo_url || 'electrozen.ma'})</span>
+                  </div>
+                  <form id="form-save-woo-settings" class="panel-body" style="display:flex;flex-direction:column;gap:12px">
+                    <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:10px">
+                      <div>
+                        <label class="field-label">URL Site WooCommerce / WordPress</label>
+                        <input name="woo_url" class="input mono" value="${state.settings.woo_url || ''}" />
+                      </div>
+                      <div>
+                        <label class="field-label">Consumer Key (ck_...)</label>
+                        <input name="woo_consumer_key" type="password" class="input mono" value="${state.settings.woo_consumer_key || ''}" />
+                      </div>
+                      <div>
+                        <label class="field-label">Consumer Secret (cs_...)</label>
+                        <input name="woo_consumer_secret" type="password" class="input mono" value="${state.settings.woo_consumer_secret || ''}" />
+                      </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                      <div>
+                        <label class="field-label">Utilisateur WordPress (Upload Médias)</label>
+                        <input name="woo_wp_user" class="input mono" placeholder="Optionnel (ex: admin)" value="${state.settings.woo_wp_user || ''}" />
+                      </div>
+                      <div>
+                        <label class="field-label">Mot de passe d'application WP (Médias)</label>
+                        <input name="woo_wp_app_password" type="password" class="input mono" placeholder="Optionnel (pour envoyer vos photos caméra locales)" value="${state.settings.woo_wp_app_password || ''}" />
+                      </div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                      <button type="submit" class="btn btn-dark">Enregistrer Clés WooCommerce</button>
+                      <button type="button" class="btn btn-primary" id="btn-test-woo" ${state.wooTestLoading ? 'disabled' : ''}>
+                        ${state.wooTestLoading ? 'Test en cours...' : 'Tester Connexion WooCommerce'}
+                      </button>
+                    </div>
+                    ${
+                      state.wooTestStatus
+                        ? `<div style="padding:10px 12px;border-radius:8px;font-size:12px;background:${state.wooTestStatus.wc_connected ? 'rgba(57,174,82,0.1)' : 'rgba(226,27,27,0.08)'};border:1px solid ${state.wooTestStatus.wc_connected ? 'rgba(57,174,82,0.35)' : 'rgba(226,27,27,0.3)'};color:${state.wooTestStatus.wc_connected ? '#166534' : '#991b1b'}">
+                            <div style="font-weight:700">${state.wooTestStatus.wc_connected ? state.wooTestStatus.message : `Échec connexion WooCommerce : ${state.wooTestStatus.error}`}</div>
+                            ${state.wooTestStatus.wp_media_message ? `<div style="font-size:11px;margin-top:4px;opacity:0.9">${state.wooTestStatus.wp_media_message}</div>` : ''}
+                          </div>`
+                        : ''
+                    }
+                  </form>
+                </div>
 
-        <!-- Pre-Sync Product Pictures Control & WooCommerce Readiness -->
-        <div class="panel" style="grid-column:1 / -1">
-          <div class="panel-header" style="flex-wrap:wrap;gap:10px">
-            <div>
-              <span class="panel-title">Contrôle & Organisation des Photos avant Synchronisation WooCommerce</span>
-              <div style="font-size:11px;color:var(--ink-400);margin-top:2px">Vérifiez, ajoutez, réordonnez ou remplacez les photos produit (#1 = Image Principale) avant d'envoyer vers electrozen.ma</div>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <input id="input-woo-sync-search" class="input" style="width:210px" placeholder="Filtrer article, marque, SKU..." value="${state.wooSyncSearch || ''}" />
-              <div class="segmented">
-                ${[
-                  { id: 'all', label: `Tous (${state.products.length})` },
-                  { id: 'pending', label: `À Sync (${state.products.filter((x) => x.woo_sync_status !== 'synced').length})` },
-                  { id: 'no_photo', label: `Sans Photo (${state.products.filter((x) => getProductImages(x).length === 0).length})` },
-                  { id: 'with_photo', label: `Avec Photos (${state.products.filter((x) => getProductImages(x).length > 0).length})` },
-                ]
-                  .map(
-                    (f) => `<button type="button" class="seg-btn ${state.wooSyncFilter === f.id ? 'active' : ''}" data-woo-filter="${f.id}">${f.label}</button>`
-                  )
-                  .join('')}
-              </div>
-              <button type="button" class="btn btn-primary" id="btn-sync-woo-panel">${ICONS.sync}<span>Synchroniser Tous (${state.products.filter((x) => x.woo_sync_status !== 'synced').length})</span></button>
-            </div>
-          </div>
-          ${
-            state.wooSyncReport
-              ? `<div style="margin:12px 16px 0;padding:10px 12px;border-radius:8px;font-size:12px;background:${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#fef2f2' : '#ecfdf5'};border:1px solid ${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#fecaca' : '#a7f3d0'};color:${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#991b1b' : '#065f46'}">
-                  <div style="font-weight:700">${state.wooSyncReport.error ? state.wooSyncReport.error : `Sync WooCommerce : ${state.wooSyncReport.syncedCount} synchronisé(s), ${state.wooSyncReport.failedCount || 0} échec(s).`}</div>
-                  ${state.wooSyncReport.localSkippedImagesTotal > 0 ? `<div style="font-size:11px;margin-top:4px">${state.wooSyncReport.localSkippedImagesTotal} photo(s) locale(s) ignorée(s) car aucun Mot de passe d'application WP Médias n'est saisi (utilisez Recherche Photo Web ou ajoutez les identifiants WP ci-dessus).</div>` : ''}
-                  ${(state.wooSyncReport.errors || []).slice(0, 4).map((e) => `<div class="mono" style="font-size:11px;margin-top:2px">• ${e.name} (${e.sku}) : ${e.error}</div>`).join('')}
-                </div>`
-              : ''
-          }
-          <div class="table-wrap" style="max-height:420px;overflow-y:auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>Article & SKU</th>
-                  <th>Galerie Photos (#1 Principale)</th>
-                  <th style="text-align:center">Stock</th>
-                  <th style="text-align:end">Prix</th>
-                  <th>Statut WooCommerce</th>
-                  <th style="text-align:end">Actions Avant Sync</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${(() => {
-                  const q = String(state.wooSyncSearch || '').toLowerCase().trim();
-                  const list = state.products.filter((p) => {
-                    const imgs = getProductImages(p);
-                    if (state.wooSyncFilter === 'pending' && p.woo_sync_status === 'synced') return false;
-                    if (state.wooSyncFilter === 'no_photo' && imgs.length > 0) return false;
-                    if (state.wooSyncFilter === 'with_photo' && imgs.length === 0) return false;
-                    if (q && !`${p.name_fr} ${p.brand} ${p.model_number} ${p.sku} ${p.barcode}`.toLowerCase().includes(q)) return false;
-                    return true;
-                  });
-                  if (list.length === 0) {
-                    return '<tr><td colspan="6" style="text-align:center;color:var(--ink-400);padding:24px">Aucun article dans ce filtre.</td></tr>';
+                <!-- Pre-Sync Product Pictures Control & WooCommerce Readiness -->
+                <div class="panel">
+                  <div class="panel-header" style="flex-wrap:wrap;gap:10px">
+                    <div>
+                      <span class="panel-title">Contrôle & Organisation des Photos avant Synchronisation WooCommerce</span>
+                      <div style="font-size:11px;color:var(--ink-400);margin-top:2px">Vérifiez, ajoutez, réordonnez ou remplacez les photos produit (#1 = Image Principale) avant d'envoyer vers electrozen.ma</div>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                      <input id="input-woo-sync-search" class="input" style="width:210px" placeholder="Filtrer article, marque, SKU..." value="${state.wooSyncSearch || ''}" />
+                      <div class="segmented">
+                        ${[
+                          { id: 'all', label: `Tous (${state.products.length})` },
+                          { id: 'pending', label: `À Sync (${pendingWooCnt})` },
+                          { id: 'no_photo', label: `Sans Photo (${state.products.filter((x) => getProductImages(x).length === 0).length})` },
+                          { id: 'with_photo', label: `Avec Photos (${state.products.filter((x) => getProductImages(x).length > 0).length})` },
+                        ]
+                          .map(
+                            (f) => `<button type="button" class="seg-btn ${state.wooSyncFilter === f.id ? 'active' : ''}" data-woo-filter="${f.id}">${f.label}</button>`
+                          )
+                          .join('')}
+                      </div>
+                      <button type="button" class="btn btn-primary" id="btn-sync-woo-panel">${ICONS.sync}<span>Synchroniser Tous (${pendingWooCnt})</span></button>
+                    </div>
+                  </div>
+                  ${
+                    state.wooSyncReport
+                      ? `<div style="margin:12px 16px 0;padding:10px 12px;border-radius:8px;font-size:12px;background:${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#fef2f2' : '#ecfdf5'};border:1px solid ${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#fecaca' : '#a7f3d0'};color:${state.wooSyncReport.failedCount > 0 || state.wooSyncReport.error ? '#991b1b' : '#065f46'}">
+                          <div style="font-weight:700">${state.wooSyncReport.error ? state.wooSyncReport.error : `Sync WooCommerce : ${state.wooSyncReport.syncedCount} synchronisé(s), ${state.wooSyncReport.failedCount || 0} échec(s).`}</div>
+                          ${state.wooSyncReport.localSkippedImagesTotal > 0 ? `<div style="font-size:11px;margin-top:4px">${state.wooSyncReport.localSkippedImagesTotal} photo(s) locale(s) ignorée(s) car aucun Mot de passe d'application WP Médias n'est saisi (utilisez Recherche Photo Web ou ajoutez les identifiants WP ci-dessus).</div>` : ''}
+                          ${(state.wooSyncReport.errors || []).slice(0, 4).map((e) => `<div class="mono" style="font-size:11px;margin-top:2px">• ${e.name} (${e.sku}) : ${e.error}</div>`).join('')}
+                        </div>`
+                      : ''
                   }
-                  return list
-                    .slice(0, 60)
-                    .map((p) => {
-                      const imgs = getProductImages(p);
-                      return `
+                  <div class="table-wrap" style="max-height:460px;overflow-y:auto">
+                    <table>
+                      <thead>
                         <tr>
-                          <td>
-                            <div style="font-weight:700;color:var(--ink-900);max-width:240px">${getProdName(p)}</div>
-                            <div class="mono" style="font-size:11px;color:var(--ink-400)">SKU: ${p.sku || p.barcode} ${p.woo_id_verified ? `• Woo #${p.woo_id}` : ''}</div>
-                          </td>
-                          <td>
-                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                              ${
-                                imgs.length === 0
-                                  ? `<span class="tag tag-danger" style="font-size:10.5px">Aucune photo</span>`
-                                  : imgs
-                                      .slice(0, 4)
-                                      .map(
-                                        (u, idx) => `<div style="position:relative;border:2px solid ${idx === 0 ? '#4f46e5' : '#e2e8f0'};border-radius:6px;padding:1px;background:#fff">
-                                            <img src="${u}" style="width:38px;height:38px;object-fit:contain;display:block" loading="lazy" />
-                                            ${idx === 0 ? `<span style="position:absolute;top:-5px;left:-4px;background:#4f46e5;color:#fff;font-size:8px;font-weight:800;padding:0 3px;border-radius:4px">★1</span>` : ''}
-                                          </div>`
-                                      )
-                                      .join('')
-                              }
-                              ${imgs.length > 4 ? `<span class="tag" style="font-size:10px">+${imgs.length - 4}</span>` : ''}
-                            </div>
-                          </td>
-                          <td style="text-align:center"><span class="tag ${p.stock_quantity > 0 ? 'tag-ok' : 'tag-danger'} num">${p.stock_quantity}</span></td>
-                          <td class="num" style="text-align:end;font-weight:700">${fmtMoney(p.retail_price)}</td>
-                          <td>
-                            <span class="tag ${p.woo_sync_status === 'synced' ? 'tag-ok' : 'tag-warn'}">${p.woo_sync_status === 'synced' ? 'Synchronisé' : 'En attente'}</span>
-                            ${p.woo_last_error ? `<div style="font-size:10px;color:#b91c1c;max-width:170px;margin-top:2px">${p.woo_last_error}</div>` : ''}
-                          </td>
-                          <td style="text-align:end">
-                            <div class="action-group">
-                              <button type="button" class="btn btn-sm btn-open-pictures" data-id="${p.id}">${ICONS.image}<span>Gérer (${imgs.length})</span></button>
-                              <button type="button" class="btn btn-sm btn-open-pictures" data-id="${p.id}" data-web="1" title="Chercher une photo officielle sur le Web">${ICONS.search}</button>
-                              <button type="button" class="btn btn-sm btn-dark btn-sync-single-woo" data-id="${p.id}">Sync</button>
-                            </div>
-                          </td>
+                          <th>Article & SKU</th>
+                          <th>Galerie Photos (#1 Principale)</th>
+                          <th style="text-align:center">Stock</th>
+                          <th style="text-align:end">Prix</th>
+                          <th>Statut WooCommerce</th>
+                          <th style="text-align:end">Actions Avant Sync</th>
                         </tr>
-                      `;
-                    })
-                    .join('');
-                })()}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                      </thead>
+                      <tbody>
+                        ${(() => {
+                          const q = String(state.wooSyncSearch || '').toLowerCase().trim();
+                          const list = state.products.filter((p) => {
+                            const imgs = getProductImages(p);
+                            if (state.wooSyncFilter === 'pending' && p.woo_sync_status === 'synced') return false;
+                            if (state.wooSyncFilter === 'no_photo' && imgs.length > 0) return false;
+                            if (state.wooSyncFilter === 'with_photo' && imgs.length === 0) return false;
+                            if (q && !`${p.name_fr} ${p.brand} ${p.model_number} ${p.sku} ${p.barcode}`.toLowerCase().includes(q)) return false;
+                            return true;
+                          });
+                          if (list.length === 0) {
+                            return '<tr><td colspan="6" style="text-align:center;color:var(--ink-400);padding:24px">Aucun article dans ce filtre.</td></tr>';
+                          }
+                          return list
+                            .slice(0, 60)
+                            .map((p) => {
+                              const imgs = getProductImages(p);
+                              return `
+                                <tr>
+                                  <td>
+                                    <div style="font-weight:700;color:var(--ink-900);max-width:240px">${getProdName(p)}</div>
+                                    <div class="mono" style="font-size:11px;color:var(--ink-400)">SKU: ${p.sku || p.barcode} ${p.woo_id_verified ? `• Woo #${p.woo_id}` : ''}</div>
+                                  </td>
+                                  <td>
+                                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                                      ${
+                                        imgs.length === 0
+                                          ? `<span class="tag tag-danger" style="font-size:10.5px">Aucune photo</span>`
+                                          : imgs
+                                              .slice(0, 4)
+                                              .map(
+                                                (u, idx) => `<div style="position:relative;border:2px solid ${idx === 0 ? '#4f46e5' : '#e2e8f0'};border-radius:6px;padding:1px;background:#fff">
+                                                    <img src="${u}" style="width:38px;height:38px;object-fit:contain;display:block" loading="lazy" />
+                                                    ${idx === 0 ? `<span style="position:absolute;top:-5px;left:-4px;background:#4f46e5;color:#fff;font-size:8px;font-weight:800;padding:0 3px;border-radius:4px">★1</span>` : ''}
+                                                  </div>`
+                                              )
+                                              .join('')
+                                      }
+                                      ${imgs.length > 4 ? `<span class="tag" style="font-size:10px">+${imgs.length - 4}</span>` : ''}
+                                    </div>
+                                  </td>
+                                  <td style="text-align:center"><span class="tag ${p.stock_quantity > 0 ? 'tag-ok' : 'tag-danger'} num">${p.stock_quantity}</span></td>
+                                  <td class="num" style="text-align:end;font-weight:700">${fmtMoney(p.retail_price)}</td>
+                                  <td>
+                                    <span class="tag ${p.woo_sync_status === 'synced' ? 'tag-ok' : 'tag-warn'}">${p.woo_sync_status === 'synced' ? 'Synchronisé' : 'En attente'}</span>
+                                    ${p.woo_last_error ? `<div style="font-size:10px;color:#b91c1c;max-width:170px;margin-top:2px">${p.woo_last_error}</div>` : ''}
+                                  </td>
+                                  <td style="text-align:end">
+                                    <div class="action-group">
+                                      <button type="button" class="btn btn-sm btn-open-pictures" data-id="${p.id}">${ICONS.image}<span>Gérer (${imgs.length})</span></button>
+                                      <button type="button" class="btn btn-sm btn-open-pictures" data-id="${p.id}" data-web="1" title="Chercher une photo officielle sur le Web">${ICONS.search}</button>
+                                      <button type="button" class="btn btn-sm btn-dark btn-sync-single-woo" data-id="${p.id}">Sync</button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              `;
+                            })
+                            .join('');
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>`
+            : csub === 'android'
+              ? `<div class="panel">
+                  <div class="panel-header">
+                    <span class="panel-title">Serveur Local Wi-Fi & Terminaux Android</span>
+                  </div>
+                  <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
+                    <div style="display:flex;gap:16px;align-items:center;padding:12px;background:var(--panel-subtle);border:1px solid var(--border);border-radius:8px;flex-wrap:wrap">
+                      ${qrSvg}
+                      <div style="display:flex;flex-direction:column;gap:6px">
+                        <div>
+                          <span class="field-label">Hôte Local (Même réseau Wi-Fi)</span>
+                          <div class="mono" style="font-size:14px;font-weight:700;color:var(--ink-900)">
+                            http://${state.networkInfo?.primaryIp || '127.0.0.1'}:${state.networkInfo?.port || 4000}
+                          </div>
+                        </div>
+                        <div>
+                          <span class="field-label">Clé d'appairage</span>
+                          <div class="mono" style="font-weight:600;color:var(--ink-500)">${state.networkInfo?.pairingToken || 'ELECTROZEN-POS-2026'}</div>
+                        </div>
+                        <div>
+                          <span class="field-label">App Mobile Web (/mobile)</span>
+                          <div class="mono" style="font-size:12px;font-weight:700;color:var(--ink-900)">
+                            http://${state.networkInfo?.primaryIp || '127.0.0.1'}:${state.networkInfo?.port || 4000}/mobile
+                          </div>
+                        </div>
+                      </div>
+                    </div>
 
-        <!-- Backup, CSV Catalog Import, Store Init & Audit Log -->
-        <div class="panel" style="grid-column:1 / -1">
-          <div class="panel-header">
-            <span class="panel-title">Sauvegardes Automatiques SQLite, Import Catalogue CSV & Journal d'Audit</span>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn btn-sm" id="btn-backup-now">Créer Sauvegarde Maintenant</button>
-              <label class="btn btn-sm" style="cursor:pointer">
-                <span>Importer Catalogue CSV</span>
-                <input type="file" id="input-import-csv" accept=".csv,.txt" style="display:none" />
-              </label>
-              <button class="btn btn-sm" id="btn-open-reset-store" style="color:#e21b1b;border-color:rgba(226,27,27,0.35)">Vider Données Démo (Mise en Production)</button>
-            </div>
-          </div>
-          <div class="panel-body grid-2">
-            <div>
-              <div class="field-label" style="margin-bottom:6px">Dernières Sauvegardes SQLite (data/backups/)</div>
-              <div class="table-wrap" style="max-height:200px;overflow-y:auto">
-                <table>
-                  <thead><tr><th>Fichier</th><th style="text-align:end">Taille</th></tr></thead>
-                  <tbody>
-                    ${(state.backups || [])
-                      .slice(0, 8)
-                      .map(
-                        (b) => `<tr><td class="mono" style="font-size:11.5px">${b.name}</td><td class="mono" style="text-align:end;font-size:11px">${(b.size / 1024).toFixed(1)} KB</td></tr>`
-                      )
-                      .join('') || '<tr><td colspan="2" style="color:var(--ink-400)">Aucune sauvegarde</td></tr>'}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div>
-              <div class="field-label" style="margin-bottom:6px">Journal d'Audit (Actions Critiques)</div>
-              <div class="table-wrap" style="max-height:200px;overflow-y:auto">
-                <table>
-                  <thead><tr><th>Date</th><th>Opérateur</th><th>Action</th></tr></thead>
-                  <tbody>
-                    ${(state.auditLogs || [])
-                      .slice(0, 10)
-                      .map(
-                        (a) => `<tr><td class="mono" style="font-size:10.5px">${String(a.created_at || '').slice(5, 16)}</td><td style="font-size:11.5px;font-weight:600">${a.user_name}</td><td class="mono" style="font-size:11px">${a.action}</td></tr>`
-                      )
-                      .join('') || '<tr><td colspan="3" style="color:var(--ink-400)">Aucune activité</td></tr>'}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                      <a href="/download/ELECTROZEN-Android.apk" class="btn btn-pos" style="text-decoration:none">
+                        ${ICONS.download}
+                        <span>Télécharger APK Android (ELECTROZEN-Android.apk)</span>
+                      </a>
+                      <button class="btn btn-dark" id="btn-sim-android-pair">Tester Appairage Terminal Android</button>
+                      <button class="btn" id="btn-sim-android-scan">Simuler Scan Code-Barres Android</button>
+                      <a href="/mobile" target="_blank" class="btn" style="text-decoration:none">Ouvrir l'App Mobile Web (/mobile)</a>
+                    </div>
+
+                    <div class="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Terminal Mobile</th>
+                            <th>Dernière Activité</th>
+                            <th style="text-align:end">État</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${(state.networkInfo?.pairedDevices || [])
+                            .map(
+                              (d) => `
+                            <tr>
+                              <td style="font-weight:600;color:var(--ink-900)">${d.device_name}</td>
+                              <td class="mono" style="font-size:11.5px;color:var(--ink-400)">${d.last_seen.slice(0, 16)}</td>
+                              <td style="text-align:end"><span class="tag tag-ok">En ligne</span></td>
+                            </tr>
+                          `
+                            )
+                            .join('') || '<tr><td colspan="3" style="text-align:center;color:var(--ink-400);padding:20px">Aucun terminal connecté pour le moment.</td></tr>'}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>`
+              : `<div style="display:flex;flex-direction:column;gap:16px">
+                  <div class="panel">
+                    <div class="panel-header">
+                      <span class="panel-title">Paramètres Enseigne, Fiscalité Maroc (ICE/IF/RC) & Moteur IA</span>
+                    </div>
+                    <form id="form-save-settings" class="panel-body" style="display:flex;flex-direction:column;gap:12px">
+                      <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
+                        <div>
+                          <label class="field-label">Raison Sociale / Nom du Magasin</label>
+                          <input name="store_name" class="input" value="${state.settings.store_name || ''}" />
+                        </div>
+                        <div>
+                          <label class="field-label">Devise</label>
+                          <input name="currency" class="input mono" value="${state.settings.currency || 'MAD'}" />
+                        </div>
+                      </div>
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                        <div>
+                          <label class="field-label">Téléphone Magasin</label>
+                          <input name="store_phone" class="input mono" value="${state.settings.store_phone || ''}" />
+                        </div>
+                        <div>
+                          <label class="field-label">Adresse Magasin</label>
+                          <input name="store_address" class="input" value="${state.settings.store_address || ''}" />
+                        </div>
+                      </div>
+                      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+                        <div>
+                          <label class="field-label">ICE Entreprise (Maroc)</label>
+                          <input name="store_ice" class="input mono" value="${state.settings.store_ice || ''}" />
+                        </div>
+                        <div>
+                          <label class="field-label">Identifiant Fiscal (IF)</label>
+                          <input name="store_if" class="input mono" value="${state.settings.store_if || ''}" />
+                        </div>
+                        <div>
+                          <label class="field-label">RC / Patente / TVA %</label>
+                          <input name="store_rc" class="input mono" value="${state.settings.store_rc || ''}" />
+                        </div>
+                      </div>
+                      <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:10px">
+                        <div>
+                          <label class="field-label">Fournisseur IA (Boîte / Factures / Enhance)</label>
+                          <select name="ai_provider" class="input">
+                            <option value="deepseek" ${(state.settings.ai_provider || 'gemini') === 'deepseek' ? 'selected' : ''}>DeepSeek API (deepseek-chat)</option>
+                            <option value="gemini" ${(state.settings.ai_provider || 'gemini') === 'gemini' ? 'selected' : ''}>Google Gemini (3 Flash Preview)</option>
+                            <option value="openai" ${(state.settings.ai_provider || 'gemini') === 'openai' ? 'selected' : ''}>OpenAI (gpt-4o-mini)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label class="field-label">Clé API IA (DeepSeek / Gemini / OpenAI)</label>
+                          <input name="ai_api_key" type="password" class="input mono" placeholder="sk-... ou AIza..." value="${state.settings.ai_api_key || ''}" />
+                        </div>
+                      </div>
+                      <button type="submit" class="btn btn-dark" style="align-self:flex-start;padding:8px 20px">Enregistrer Enseigne & IA</button>
+                    </form>
+                  </div>
+
+                  <div class="panel">
+                    <div class="panel-header">
+                      <span class="panel-title">Sauvegardes Automatiques SQLite & Journal d'Audit</span>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-sm" id="btn-backup-now">Créer Sauvegarde Maintenant</button>
+                        <button class="btn btn-sm" id="btn-open-reset-store" style="color:#e21b1b;border-color:rgba(226,27,27,0.35)">Vider Données Démo (Mise en Production)</button>
+                      </div>
+                    </div>
+                    <div class="panel-body grid-2">
+                      <div>
+                        <div class="field-label" style="margin-bottom:6px">Dernières Sauvegardes SQLite (data/backups/)</div>
+                        <div class="table-wrap" style="max-height:200px;overflow-y:auto">
+                          <table>
+                            <thead><tr><th>Fichier</th><th style="text-align:end">Taille</th></tr></thead>
+                            <tbody>
+                              ${(state.backups || [])
+                                .slice(0, 8)
+                                .map(
+                                  (b) => `<tr><td class="mono" style="font-size:11.5px">${b.name}</td><td class="mono" style="text-align:end;font-size:11px">${(b.size / 1024).toFixed(1)} KB</td></tr>`
+                                )
+                                .join('') || '<tr><td colspan="2" style="color:var(--ink-400)">Aucune sauvegarde</td></tr>'}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                      <div>
+                        <div class="field-label" style="margin-bottom:6px">Journal d'Audit (Actions Critiques)</div>
+                        <div class="table-wrap" style="max-height:200px;overflow-y:auto">
+                          <table>
+                            <thead><tr><th>Date</th><th>Opérateur</th><th>Action</th></tr></thead>
+                            <tbody>
+                              ${(state.auditLogs || [])
+                                .slice(0, 10)
+                                .map(
+                                  (a) => `<tr><td class="mono" style="font-size:10.5px">${String(a.created_at || '').slice(5, 16)}</td><td style="font-size:11.5px;font-weight:600">${a.user_name}</td><td class="mono" style="font-size:11px">${a.action}</td></tr>`
+                                )
+                                .join('') || '<tr><td colspan="3" style="color:var(--ink-400)">Aucune activité</td></tr>'}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>`
+        }
       </div>
     `;
   }
@@ -3491,6 +3678,16 @@ function attachEvents() {
 
   const btnOpenScanner = document.getElementById('btn-open-scanner');
   if (btnOpenScanner) btnOpenScanner.onclick = () => openBarcodeInspector('');
+  const btnOpenScannerTop = document.getElementById('btn-open-scanner-top');
+  if (btnOpenScannerTop) btnOpenScannerTop.onclick = () => openBarcodeInspector('');
+
+  const btnCashTopbar = document.getElementById('btn-cash-topbar');
+  if (btnCashTopbar) {
+    btnCashTopbar.onclick = () => {
+      state.cashModalMode = state.cashSession?.openSession ? 'close' : 'open';
+      render();
+    };
+  }
 
   const btnOpenPin = document.getElementById('btn-open-pin');
   if (btnOpenPin) {
@@ -3619,7 +3816,7 @@ function attachEvents() {
   const btnTestWoo = document.getElementById('btn-test-woo');
   if (btnTestWoo) {
     btnTestWoo.onclick = async () => {
-      const form = document.getElementById('form-save-settings');
+      const form = document.getElementById('form-save-woo-settings') || document.getElementById('form-save-settings');
       const fd = form ? new FormData(form) : null;
       const body = fd ? Object.fromEntries(fd.entries()) : {};
       state.wooTestLoading = true;
@@ -3637,6 +3834,40 @@ function attachEvents() {
       }
       state.wooTestLoading = false;
       render();
+    };
+  }
+
+  document.querySelectorAll('[data-psub]').forEach((b) => {
+    b.onclick = () => {
+      state.productsSubTab = b.getAttribute('data-psub') || 'list';
+      render();
+    };
+  });
+  document.querySelectorAll('[data-prod-filter]').forEach((b) => {
+    b.onclick = () => {
+      state.productsFilterMode = b.getAttribute('data-prod-filter') || 'all';
+      render();
+    };
+  });
+  document.querySelectorAll('[data-csub]').forEach((b) => {
+    b.onclick = () => {
+      state.connectSubTab = b.getAttribute('data-csub') || 'woo';
+      render();
+    };
+  });
+
+  const formWooSettings = document.getElementById('form-save-woo-settings');
+  if (formWooSettings) {
+    formWooSettings.onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(formWooSettings);
+      await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.fromEntries(fd.entries())),
+      });
+      await loadAllData();
+      showToast('Paramètres WooCommerce sauvegardés');
     };
   }
 
@@ -5576,7 +5807,12 @@ function attachEvents() {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'F2') {
+  if (e.key === 'F1') {
+    e.preventDefault();
+    state.activeTab = 'pos';
+    render();
+    setTimeout(() => document.getElementById('input-pos-barcode')?.focus(), 40);
+  } else if (e.key === 'F2') {
     e.preventDefault();
     if (state.inspectorOpen) {
       state.inspectorOpen = false;
