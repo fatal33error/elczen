@@ -9,7 +9,7 @@ class ElectroZenPrintService {
 
   static String _fmt(double v) => '${_madFmt.format(v)} MAD';
 
-  static Future<void> printInvoiceA4(SaleRecord sale, Map<String, String> settings) async {
+  static Future<pw.Document> _buildInvoicePdfDoc(SaleRecord sale, Map<String, String> settings) async {
     final storeName = settings['store_name'] ?? 'ELECTROZEN';
     final storePhone = settings['store_phone'] ?? '+212 522 48 91 00';
     final storeAddr = settings['store_address'] ?? 'Quartier Maarif, Casablanca';
@@ -131,9 +131,72 @@ class ElectroZenPrintService {
         ],
       ),
     );
+    return doc;
+  }
 
+  static Future<void> printInvoiceA4(SaleRecord sale, Map<String, String> settings) async {
+    final doc = await _buildInvoicePdfDoc(sale, settings);
     await Printing.layoutPdf(
       name: 'Facture_${sale.invoiceNumber}',
+      onLayout: (format) async => doc.save(),
+    );
+  }
+
+  static Future<void> shareInvoicePdf(SaleRecord sale, Map<String, String> settings) async {
+    final doc = await _buildInvoicePdfDoc(sale, settings);
+    await Printing.sharePdf(
+      bytes: await doc.save(),
+      filename: 'Facture_Garantie_${sale.invoiceNumber}.pdf',
+    );
+  }
+
+  static Future<void> printBarcodeSticker(Product product, Map<String, String> settings, {int copies = 1}) async {
+    final code = product.barcode.isNotEmpty ? product.barcode : (product.sku.isNotEmpty ? product.sku : 'EZ${product.id}');
+    final doc = pw.Document();
+    const stickerFmt = PdfPageFormat(50 * PdfPageFormat.mm, 30 * PdfPageFormat.mm);
+    for (int i = 0; i < copies.clamp(1, 20); i++) {
+      doc.addPage(
+        pw.Page(
+          pageFormat: stickerFmt,
+          margin: const pw.EdgeInsets.all(4),
+          build: (ctx) => pw.Column(
+            mainAxisAlignment: pw.MainAxisAlignment.center,
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
+            children: [
+              pw.Text(
+                '${product.brand.toUpperCase()} • ${product.modelNumber.isNotEmpty ? product.modelNumber : product.sku}',
+                maxLines: 1,
+                style: pw.TextStyle(fontSize: 6.5, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700),
+              ),
+              pw.SizedBox(height: 1.5),
+              pw.Text(
+                product.nameFr,
+                maxLines: 1,
+                textAlign: pw.TextAlign.center,
+                style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold),
+              ),
+              pw.SizedBox(height: 3),
+              pw.BarcodeWidget(
+                barcode: pw.Barcode.code128(),
+                data: code,
+                width: 112,
+                height: 26,
+                drawText: false,
+              ),
+              pw.SizedBox(height: 1.5),
+              pw.Text(code, style: const pw.TextStyle(fontSize: 7)),
+              pw.SizedBox(height: 2),
+              pw.Text(
+                _fmt(product.retailPrice),
+                style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    await Printing.layoutPdf(
+      name: 'Etiquette_${product.sku.isNotEmpty ? product.sku : product.barcode}',
       onLayout: (format) async => doc.save(),
     );
   }

@@ -36,7 +36,7 @@ export function withTransaction<T>(fn: () => T): T {
   }
 }
 
-export function getNextInvoiceNumber(prefix: 'FAC' | 'AV' | 'DEV' | 'SAV' | 'ADJ' = 'FAC'): string {
+export function getNextInvoiceNumber(prefix: 'FAC' | 'AV' | 'DEV' | 'SAV' | 'ADJ' | 'TRF' | 'CHK' = 'FAC'): string {
   const year = new Date().getFullYear();
   db.prepare(`
     INSERT INTO invoice_counters (prefix, year, last_seq)
@@ -391,6 +391,62 @@ export function initDatabase() {
       FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS bank_checks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      direction TEXT NOT NULL DEFAULT 'issued',
+      instrument_type TEXT NOT NULL DEFAULT 'check',
+      check_number TEXT NOT NULL DEFAULT '',
+      bank_code TEXT NOT NULL DEFAULT 'cam',
+      bank_name TEXT NOT NULL DEFAULT 'Crédit Agricole du Maroc',
+      beneficiary_or_issuer TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      amount_words TEXT DEFAULT '',
+      issue_city TEXT NOT NULL DEFAULT 'Casablanca',
+      issue_date TEXT NOT NULL DEFAULT (date('now')),
+      due_date TEXT NOT NULL DEFAULT (date('now')),
+      is_crossed INTEGER NOT NULL DEFAULT 1,
+      non_endorsable INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      supplier_id INTEGER DEFAULT NULL,
+      customer_id INTEGER DEFAULT NULL,
+      sale_id INTEGER DEFAULT NULL,
+      purchase_id INTEGER DEFAULT NULL,
+      notes TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS woo_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      woo_order_id INTEGER UNIQUE NOT NULL,
+      order_number TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      local_status TEXT NOT NULL DEFAULT 'pending',
+      customer_name TEXT NOT NULL DEFAULT '',
+      customer_phone TEXT DEFAULT '',
+      customer_email TEXT DEFAULT '',
+      customer_address TEXT DEFAULT '',
+      customer_city TEXT DEFAULT '',
+      payment_method_title TEXT DEFAULT 'Paiement à la livraison (COD)',
+      total_amount REAL NOT NULL DEFAULT 0,
+      items_json TEXT NOT NULL DEFAULT '[]',
+      converted_sale_id INTEGER DEFAULT NULL,
+      order_date TEXT NOT NULL DEFAULT (datetime('now')),
+      synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS stock_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transfer_number TEXT UNIQUE NOT NULL,
+      product_id INTEGER NOT NULL,
+      product_name TEXT NOT NULL,
+      direction TEXT NOT NULL DEFAULT 'depot_to_shop',
+      quantity INTEGER NOT NULL,
+      notes TEXT DEFAULT '',
+      operator_name TEXT DEFAULT 'Admin',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
     CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
     CREATE INDEX IF NOT EXISTS idx_products_model ON products(model_number);
@@ -444,6 +500,24 @@ export function initDatabase() {
   }
   if (!sCols.includes('credit_note_number')) {
     db.exec("ALTER TABLE sales ADD COLUMN credit_note_number TEXT DEFAULT ''");
+  }
+
+  if (!pCols.includes('warehouse_quantity')) {
+    db.exec('ALTER TABLE products ADD COLUMN warehouse_quantity INTEGER NOT NULL DEFAULT 0');
+  }
+
+  const sjCols = (db.prepare('PRAGMA table_info(service_jobs)').all() as { name: string }[]).map((c) => c.name);
+  if (!sjCols.includes('invoice_number')) {
+    db.exec("ALTER TABLE service_jobs ADD COLUMN invoice_number TEXT DEFAULT ''");
+  }
+  if (!sjCols.includes('under_warranty')) {
+    db.exec('ALTER TABLE service_jobs ADD COLUMN under_warranty INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!sjCols.includes('supplier_rma_status')) {
+    db.exec("ALTER TABLE service_jobs ADD COLUMN supplier_rma_status TEXT DEFAULT 'none'");
+  }
+  if (!sjCols.includes('accessories_received')) {
+    db.exec("ALTER TABLE service_jobs ADD COLUMN accessories_received TEXT DEFAULT ''");
   }
 
   const integrity = db.prepare('PRAGMA integrity_check').get() as { integrity_check: string } | undefined;
@@ -537,6 +611,9 @@ export function resetStoreForProduction(cfg: Record<string, string> = {}) {
       DELETE FROM quotations;
       DELETE FROM service_jobs;
       DELETE FROM stock_adjustments;
+      DELETE FROM bank_checks;
+      DELETE FROM woo_orders;
+      DELETE FROM stock_transfers;
       DELETE FROM invoice_counters;
       DELETE FROM sqlite_sequence WHERE name NOT IN ('users');
       PRAGMA foreign_keys = ON;

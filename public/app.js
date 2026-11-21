@@ -19,6 +19,9 @@ const ICONS = {
   reports: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`,
   image: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
   search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  whatsapp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="11" x2="14" y2="11"/><line x1="6" y1="14" x2="11" y2="14"/><line x1="16" y1="11" x2="19" y2="11"/></svg>`,
+  transfer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
 };
 
 const I18N = {
@@ -30,7 +33,7 @@ const I18N = {
     quotations: 'Devis & Atelier SAV',
     purchases: 'Achats & Factures IA',
     customers: 'Clients & Crédits',
-    expenses: 'Charges & Trésorerie',
+    expenses: 'Trésorerie, Chèques & Charges',
     reports: 'Rapports P&L & Marges',
     connect: 'WooCommerce & Terminaux',
     quickScanBtn: 'Vérificateur de Prix',
@@ -100,11 +103,46 @@ const state = {
   reportsSubTab: 'pnl',
   productsSubTab: 'list', // 'list' | 'gallery' | 'adjustments'
   productsFilterMode: 'all', // 'all' | 'low_stock' | 'no_photo' | 'woo_pending'
-  connectSubTab: 'woo', // 'woo' | 'android' | 'settings'
+  connectSubTab: 'woo', // 'woo' | 'orders' | 'android' | 'settings'
+  expensesSubTab: 'checks', // 'checks' | 'expenses'
   dashboard: null,
   quotations: [],
   serviceJobs: [],
   stockAdjustments: [],
+  stockTransfers: [],
+  bankChecks: [],
+  checksStats: { totalIssuedPending: 0, totalReceivedPending: 0, overdueCount: 0, dueSoonCount: 0 },
+  wooOrders: [],
+  wooOrdersPullLoading: false,
+  warrantyLookupQuery: '',
+  warrantyLookupResults: null,
+  savPrefill: null,
+  printableSav: null,
+  barcodeLabelCopies: 1,
+  barcodeLabelFormat: '50x30',
+  checkForm: {
+    id: null,
+    bank_code: 'cam',
+    bank_name: 'Crédit Agricole du Maroc',
+    direction: 'issued',
+    instrument_type: 'check',
+    check_number: '',
+    beneficiary_or_issuer: '',
+    amount: '',
+    issue_city: 'Casablanca',
+    issue_date: new Date().toISOString().slice(0, 10),
+    due_date: new Date().toISOString().slice(0, 10),
+    is_crossed: true,
+    non_endorsable: false,
+    protect_marks: true,
+    lang: 'fr',
+    offsetX: Number(localStorage.getItem('ez_check_offset_x') || 0),
+    offsetY: Number(localStorage.getItem('ez_check_offset_y') || 0),
+    supplier_id: '',
+    customer_id: '',
+    record_payment: false,
+    notes: '',
+  },
   pnlReport: null,
   products: [],
   suppliers: [],
@@ -236,6 +274,145 @@ function numberToFrenchWords(n) {
   return parts.join(' ') + (num > 1 ? ' dirhams' : ' dirham') + (dec > 0 ? ` et ${dec} centimes` : '');
 }
 
+const MOROCCO_BANK_PRESETS = {
+  cam: { code: 'cam', name: 'Crédit Agricole du Maroc (CAM)', cssClass: '', tag: 'CAM • 175×80mm', accent: '#15803d', amountTop: 12, amountRight: 10, words1Top: 23, wordsLeft: 28, words2Top: 31, payTop: 39, payLeft: 26, cityTop: 48, cityLeft: 95, dateTop: 48, dateLeft: 133 },
+  awb: { code: 'awb', name: 'Attijariwafa Bank', cssClass: 'check-bank-awb', tag: 'AWB • 175×80mm', accent: '#b45309', amountTop: 13, amountRight: 10, words1Top: 24, wordsLeft: 28, words2Top: 32, payTop: 40, payLeft: 26, cityTop: 49, cityLeft: 94, dateTop: 49, dateLeft: 132 },
+  bp: { code: 'bp', name: 'Banque Populaire (BCP)', cssClass: 'check-bank-bp', tag: 'BP • 175×80mm', accent: '#c2410c', amountTop: 12, amountRight: 10, words1Top: 23, wordsLeft: 28, words2Top: 31, payTop: 39, payLeft: 26, cityTop: 48, cityLeft: 94, dateTop: 48, dateLeft: 132 },
+  boa: { code: 'boa', name: 'Bank of Africa (BMCE)', cssClass: 'check-bank-boa', tag: 'BOA • 175×80mm', accent: '#1d4ed8', amountTop: 13, amountRight: 11, words1Top: 24, wordsLeft: 29, words2Top: 32, payTop: 40, payLeft: 27, cityTop: 49, cityLeft: 95, dateTop: 49, dateLeft: 133 },
+  cih: { code: 'cih', name: 'CIH Bank', cssClass: 'check-bank-cih', tag: 'CIH • 175×80mm', accent: '#0369a1', amountTop: 13, amountRight: 10, words1Top: 24, wordsLeft: 28, words2Top: 32, payTop: 40, payLeft: 26, cityTop: 49, cityLeft: 94, dateTop: 49, dateLeft: 132 },
+  sgmb: { code: 'sgmb', name: 'Société Générale Maroc (SGMB)', cssClass: '', tag: 'SGMB • 175×80mm', accent: '#b91c1c', amountTop: 13, amountRight: 10, words1Top: 24, wordsLeft: 28, words2Top: 32, payTop: 40, payLeft: 26, cityTop: 49, cityLeft: 95, dateTop: 49, dateLeft: 133 },
+  cdm: { code: 'cdm', name: 'Crédit du Maroc', cssClass: 'check-bank-boa', tag: 'CDM • 175×80mm', accent: '#1e40af', amountTop: 13, amountRight: 10, words1Top: 24, wordsLeft: 28, words2Top: 32, payTop: 40, payLeft: 26, cityTop: 49, cityLeft: 95, dateTop: 49, dateLeft: 133 },
+  abb: { code: 'abb', name: 'Al Barid Bank', cssClass: 'check-bank-awb', tag: 'ABB • 175×80mm', accent: '#a16207', amountTop: 13, amountRight: 10, words1Top: 24, wordsLeft: 28, words2Top: 32, payTop: 40, payLeft: 26, cityTop: 49, cityLeft: 95, dateTop: 49, dateLeft: 133 },
+};
+
+function numberToArabicWords(n) {
+  const num = Math.floor(Math.abs(Number(n || 0)));
+  if (num === 0) return 'صفر درهم';
+  const ones = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة', 'عشرة', 'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر', 'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر'];
+  const tens = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون'];
+  const hundreds = ['', 'مائة', 'مائتان', 'ثلاثمائة', 'أربعمائة', 'خمسمائة', 'ستمائة', 'سبعمائة', 'ثمانمائة', 'تسعمائة'];
+  function below1000(x) {
+    const h = Math.floor(x / 100);
+    const r = x % 100;
+    const p = [];
+    if (h > 0) p.push(hundreds[h]);
+    if (r > 0) {
+      if (r < 20) p.push(ones[r]);
+      else {
+        const u = r % 10;
+        const t = Math.floor(r / 10);
+        p.push(u > 0 ? `${ones[u]} و${tens[t]}` : tens[t]);
+      }
+    }
+    return p.join(' و');
+  }
+  const millions = Math.floor(num / 1000000);
+  const thousands = Math.floor((num % 1000000) / 1000);
+  const rest = num % 1000;
+  const out = [];
+  if (millions === 1) out.push('مليون');
+  else if (millions === 2) out.push('مليونان');
+  else if (millions > 2) out.push(`${below1000(millions)} مليون`);
+  if (thousands === 1) out.push('ألف');
+  else if (thousands === 2) out.push('ألفان');
+  else if (thousands > 2 && thousands <= 10) out.push(`${below1000(thousands)} آلاف`);
+  else if (thousands > 10) out.push(`${below1000(thousands)} ألف`);
+  if (rest > 0) out.push(below1000(rest));
+  const dec = Math.round((Math.abs(Number(n || 0)) - num) * 100);
+  return out.join(' و') + ' درهم' + (dec > 0 ? ` و${dec} سنتيم` : '');
+}
+
+function splitCheckWordsLines(text, maxFirstLine = 46) {
+  const s = String(text || '').trim();
+  if (s.length <= maxFirstLine) return [s, ''];
+  const words = s.split(' ');
+  let l1 = '';
+  let idx = 0;
+  for (; idx < words.length; idx++) {
+    const next = l1 ? `${l1} ${words[idx]}` : words[idx];
+    if (next.length > maxFirstLine && l1) break;
+    l1 = next;
+  }
+  return [l1, words.slice(idx).join(' ')];
+}
+
+function generateInternalEan13() {
+  const base12 = `611${Math.floor(100000000 + Math.random() * 900000000)}`;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += Number(base12[i]) * (i % 2 === 0 ? 1 : 3);
+  const chk = (10 - (sum % 10)) % 10;
+  return `${base12}${chk}`;
+}
+
+function normalizeMoroccanPhone(raw) {
+  let digits = String(raw || '').replace(/[^0-9+]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('+')) digits = digits.slice(1);
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.startsWith('0') && digits.length === 10) digits = `212${digits.slice(1)}`;
+  return digits;
+}
+
+function sendWhatsAppMessage(rawPhone, message, fallbackCustomerName = '') {
+  let phone = String(rawPhone || '').trim();
+  if (!phone) {
+    phone = prompt(`Numéro WhatsApp du client ${fallbackCustomerName ? `(${fallbackCustomerName})` : ''} (ex: 0661... ou +212661...) :`, '06') || '';
+  }
+  const normalized = normalizeMoroccanPhone(phone);
+  if (!normalized || normalized.length < 9) {
+    showToast('Numéro WhatsApp invalide ou annulé');
+    return;
+  }
+  const url = `https://wa.me/${normalized}?text=${encodeURIComponent(message)}`;
+  window.open(url, '_blank');
+}
+
+function buildSaleWhatsAppMessage(sale) {
+  const store = state.settings.store_name || 'ELECTROZEN';
+  const itemsLines = (sale.items || []).map((i) => `• ${i.quantity}x ${i.product_name} (${fmtMoney(i.subtotal)}) — Garantie ${i.warranty_months} mois`).join('\n');
+  return `Bonjour ${sale.customer_name || 'Client'},\nMerci pour votre achat chez *${store}* !\n\n📄 *Facture / Garantie :* ${sale.invoice_number}\n📅 *Date :* ${String(sale.created_at || '').slice(0, 16)}\n${itemsLines}\n\n💰 *Total TTC :* ${fmtMoney(sale.total_amount)}\n✅ *Réglé :* ${fmtMoney(sale.paid_amount)}${Number(sale.remaining_debt || 0) > 0 ? `\n⏳ *Reste dû :* ${fmtMoney(sale.remaining_debt)}` : ''}\n\nConservez ce message et votre facture pour le suivi de garantie SAV.\n${store} • ${state.settings.store_phone || ''}`;
+}
+
+function buildQuoteWhatsAppMessage(quote) {
+  const store = state.settings.store_name || 'ELECTROZEN';
+  const itemsLines = (quote.items || []).map((i) => `• ${i.quantity}x ${i.product_name} — ${fmtMoney(Number(i.unit_price) * Number(i.quantity))}`).join('\n');
+  return `Bonjour ${quote.customer_name || 'Client'},\nVoici votre *Devis Proforma* chez *${store}* :\n\n📋 *Réf :* ${quote.quote_number}\n📅 *Valable jusqu'au :* ${quote.valid_until}\n${itemsLines}\n\n💰 *Total TTC :* ${fmtMoney(quote.total_amount)}\n\nN'hésitez pas à nous confirmer votre commande.\n${store} • ${state.settings.store_phone || ''}`;
+}
+
+function buildSavWhatsAppMessage(job) {
+  const store = state.settings.store_name || 'ELECTROZEN';
+  const msgStatus =
+    job.status === 'ready'
+      ? `✅ Bonne nouvelle ! Votre appareil *${job.device_name}* est *PRÊT à récupérer* au magasin.`
+      : job.status === 'delivered'
+        ? `🙏 Merci ! Votre dossier SAV *${job.ticket_number}* (*${job.device_name}*) est clôturé et livré.`
+        : job.status === 'in_progress'
+          ? `🔧 Votre appareil *${job.device_name}* (Ticket *${job.ticket_number}*) est actuellement *en cours de diagnostic / réparation*.`
+          : `🛠️ Votre ticket SAV *${job.ticket_number}* pour *${job.device_name}* a bien été enregistré.`;
+  return `Bonjour ${job.customer_name},\n${msgStatus}\n${Number(job.total_price || 0) > 0 ? `\n💰 Total intervention : ${fmtMoney(job.total_price)} (Avance payée : ${fmtMoney(job.paid_amount)})` : job.under_warranty ? '\n🛡️ Intervention couverte sous garantie.' : ''}\n\n*${store}* • ${state.settings.store_phone || ''}`;
+}
+
+function printBankCheckNow() {
+  const styleId = 'ez-check-page-style';
+  let st = document.getElementById(styleId);
+  if (!st) {
+    st = document.createElement('style');
+    st.id = styleId;
+    document.head.appendChild(st);
+  }
+  st.textContent = '@media print { @page { size: 175mm 80mm landscape; margin: 0; } }';
+  document.body.classList.add('printing-bank-check');
+  const cleanup = () => {
+    document.body.classList.remove('printing-bank-check');
+    if (st) st.textContent = '';
+  };
+  window.addEventListener('afterprint', cleanup, { once: true });
+  setTimeout(() => {
+    window.print();
+    setTimeout(cleanup, 1200);
+  }, 60);
+}
+
 function fmtMoney(val) {
   const num = Number(val || 0);
   const cur = state.settings.currency || 'MAD';
@@ -261,7 +438,7 @@ function showToast(msg) {
 }
 
 async function loadAllData() {
-  const [dash, prods, sups, purs, custs, sales, exps, net, sets, users, cashSess, backups, auditLogs, quotes, svcJobs, stockAdjs, pnlRep] = await Promise.all([
+  const [dash, prods, sups, purs, custs, sales, exps, net, sets, users, cashSess, backups, auditLogs, quotes, svcJobs, stockAdjs, stockTrans, checksRes, wooOrds, pnlRep] = await Promise.all([
     fetch(`/api/dashboard?range=${encodeURIComponent(state.dashRange || 'all')}`).then((r) => r.json()),
     fetch('/api/products').then((r) => r.json()),
     fetch('/api/suppliers').then((r) => r.json()),
@@ -278,6 +455,9 @@ async function loadAllData() {
     fetch('/api/quotations').then((r) => r.json()).catch(() => []),
     fetch('/api/service-jobs').then((r) => r.json()).catch(() => []),
     fetch('/api/stock-adjustments').then((r) => r.json()).catch(() => []),
+    fetch('/api/stock-transfers').then((r) => r.json()).catch(() => []),
+    fetch('/api/checks').then((r) => r.json()).catch(() => ({ checks: [], stats: {} })),
+    fetch('/api/woocommerce/orders').then((r) => r.json()).catch(() => []),
     fetch(`/api/reports/profit-loss?range=${encodeURIComponent(state.pnlRange || '30d')}`).then((r) => r.json()).catch(() => null),
   ]);
   state.dashboard = dash;
@@ -296,6 +476,10 @@ async function loadAllData() {
   state.quotations = Array.isArray(quotes) ? quotes : [];
   state.serviceJobs = Array.isArray(svcJobs) ? svcJobs : [];
   state.stockAdjustments = Array.isArray(stockAdjs) ? stockAdjs : [];
+  state.stockTransfers = Array.isArray(stockTrans) ? stockTrans : [];
+  state.bankChecks = Array.isArray(checksRes?.checks) ? checksRes.checks : [];
+  state.checksStats = checksRes?.stats || { totalIssuedPending: 0, totalReceivedPending: 0, overdueCount: 0, dueSoonCount: 0 };
+  state.wooOrders = Array.isArray(wooOrds) ? wooOrds : [];
   state.pnlReport = pnlRep;
   render();
 }
@@ -487,6 +671,7 @@ function renderCatalogRows(filteredProducts) {
       </td>
       <td style="text-align:center">
         <span class="tag ${p.stock_quantity > p.min_stock_alert ? 'tag-ok' : 'tag-danger'} num">${p.stock_quantity}</span>
+        ${Number(p.warehouse_quantity || 0) > 0 ? `<div style="font-size:10px;color:var(--ink-400);margin-top:2px" class="mono">Mag: ${Math.max(0, Number(p.stock_quantity || 0) - Number(p.warehouse_quantity || 0))} • Dép: ${p.warehouse_quantity}</div>` : ''}
       </td>
       <td>
         <span class="tag ${p.woo_sync_status === 'synced' ? 'tag-ok' : 'tag-warn'}" title="${p.woo_last_error || ''}">
@@ -551,14 +736,14 @@ function render() {
       label: 'Pilotage & Finances',
       items: [
         { id: 'dashboard', label: t.dashboard, icon: ICONS.dashboard, count: '' },
-        { id: 'expenses', label: t.expenses, icon: ICONS.expenses, count: '' },
+        { id: 'expenses', label: t.expenses, icon: ICONS.check, count: ((state.checksStats?.overdueCount || 0) + (state.checksStats?.dueSoonCount || 0)) || '' },
         { id: 'reports', label: t.reports, icon: ICONS.reports, count: '' },
       ],
     },
     {
       label: 'Boutique Web & Système',
       items: [
-        { id: 'connect', label: t.connect, icon: ICONS.connect, count: state.dashboard?.pendingWooSync || '' },
+        { id: 'connect', label: t.connect, icon: ICONS.connect, count: ((state.dashboard?.pendingWooSync || 0) + (state.dashboard?.pendingWooOrders || 0)) || '' },
       ],
     },
   ];
@@ -759,6 +944,8 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
           <button class="btn" data-goto="quotations">${ICONS.quotations}<span>Devis (${d.openQuotationsCount || 0}) & SAV (${d.serviceStats?.openJobs || 0})</span></button>
           <button class="btn" data-goto="purchases">${ICONS.purchases}<span>Nouvel Achat</span></button>
           <button class="btn" id="btn-dash-add-product">${ICONS.plus}<span>Ajouter Produit</span></button>
+          <button class="btn" id="btn-dash-open-check">${ICONS.check}<span>Imprimer Chèque CAM${(state.checksStats?.overdueCount || 0) + (state.checksStats?.dueSoonCount || 0) > 0 ? ` (${(state.checksStats?.overdueCount || 0) + (state.checksStats?.dueSoonCount || 0)})` : ''}</span></button>
+          ${Number(d.pendingWooOrders || 0) > 0 ? `<button class="btn btn-pos" id="btn-dash-woo-orders">${ICONS.sync}<span>Commandes Web (${d.pendingWooOrders})</span></button>` : ''}
           <button class="btn" data-goto="reports">${ICONS.reports}<span>Rapport Profit & Pertes</span></button>
         </div>
 
@@ -1457,6 +1644,7 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                               <td style="text-align:end">
                                 <div class="action-group">
                                   <button class="btn btn-sm btn-print-sale" data-sale-id="${s.id}">${ICONS.print}<span>Facture / Garantie</span></button>
+                                  <button class="btn btn-sm btn-whatsapp-sale" data-sale-id="${s.id}" style="background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.35);color:#047857" title="Envoyer reçu & garantie par WhatsApp">${ICONS.whatsapp}<span>WA</span></button>
                                   ${isAdmin && s.status !== 'canceled' ? `<button class="btn btn-sm btn-icon btn-cancel-sale" data-sale-id="${s.id}" title="Émettre un Avoir (AV) et réintégrer le stock" style="color:#e21b1b">${ICONS.trash}</button>` : ''}
                                 </div>
                               </td>
@@ -1531,49 +1719,99 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
 
         ${
           state.productsSubTab === 'adjustments'
-            ? `<div class="grid-2" style="align-items:start">
-                <div class="panel">
-                  <div class="panel-header"><span class="panel-title">Nouvel Ajustement / Casse Stock</span></div>
-                  <form id="form-stock-adj" class="panel-body" style="display:flex;flex-direction:column;gap:10px">
-                    <div>
-                      <label class="field-label">Produit *</label>
-                      <select name="product_id" required class="input" style="text-overflow:ellipsis">
-                        ${state.products.map((p) => { const n = getProdName(p); return `<option value="${p.id}">${p.brand} — ${n.length > 52 ? n.slice(0, 52) + '…' : n} (${p.stock_quantity} u.)</option>`; }).join('')}
-                      </select>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            ? `<div style="display:flex;flex-direction:column;gap:14px">
+                <div class="grid-2" style="align-items:start">
+                  <div class="panel">
+                    <div class="panel-header"><span class="panel-title">Nouvel Ajustement / Casse Stock</span></div>
+                    <form id="form-stock-adj" class="panel-body" style="display:flex;flex-direction:column;gap:10px">
                       <div>
-                        <label class="field-label">Type de Mouvement</label>
-                        <select name="adj_type" class="input">
-                          <option value="add">Correction (+) Entrée Inventaire</option>
-                          <option value="sub">Correction (-) Écart Inventaire</option>
-                          <option value="damage">Casse / Produit Endommagé (-)</option>
+                        <label class="field-label">Produit *</label>
+                        <select name="product_id" required class="input" style="text-overflow:ellipsis">
+                          ${state.products.map((p) => { const n = getProdName(p); return `<option value="${p.id}">${p.brand} — ${n.length > 52 ? n.slice(0, 52) + '…' : n} (${p.stock_quantity} u.)</option>`; }).join('')}
                         </select>
                       </div>
-                      <div><label class="field-label">Quantité *</label><input name="quantity" type="number" min="1" required value="1" class="input mono" /></div>
-                    </div>
-                    <div><label class="field-label">Motif / Observation</label><input name="reason" class="input" placeholder="Ex: Inventaire physique, appareil abîmé..." /></div>
-                    <button type="submit" class="btn btn-dark" style="justify-content:center">Valider Mouvement Stock</button>
-                  </form>
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                        <div>
+                          <label class="field-label">Type de Mouvement</label>
+                          <select name="adj_type" class="input">
+                            <option value="add">Correction (+) Entrée Inventaire</option>
+                            <option value="sub">Correction (-) Écart Inventaire</option>
+                            <option value="damage">Casse / Produit Endommagé (-)</option>
+                          </select>
+                        </div>
+                        <div><label class="field-label">Quantité *</label><input name="quantity" type="number" min="1" required value="1" class="input mono" /></div>
+                      </div>
+                      <div><label class="field-label">Motif / Observation</label><input name="reason" class="input" placeholder="Ex: Inventaire physique, appareil abîmé..." /></div>
+                      <button type="submit" class="btn btn-dark" style="justify-content:center">Valider Mouvement Stock</button>
+                    </form>
+                  </div>
+
+                  <div class="panel">
+                    <div class="panel-header"><span class="panel-title">${ICONS.transfer} Transfert Multi-Dépôt (Magasin ⇄ Dépôt Réserve)</span></div>
+                    <form id="form-stock-transfer" class="panel-body" style="display:flex;flex-direction:column;gap:10px">
+                      <div>
+                        <label class="field-label">Produit *</label>
+                        <select name="product_id" required class="input" style="text-overflow:ellipsis">
+                          ${state.products.map((p) => { const n = getProdName(p); const dep = Number(p.warehouse_quantity || 0); const shop = Math.max(0, Number(p.stock_quantity || 0) - dep); return `<option value="${p.id}">${p.brand} — ${n.length > 42 ? n.slice(0, 42) + '…' : n} (Mag: ${shop} / Dép: ${dep})</option>`; }).join('')}
+                        </select>
+                      </div>
+                      <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:8px">
+                        <div>
+                          <label class="field-label">Sens du Transfert</label>
+                          <select name="direction" class="input">
+                            <option value="shop_to_depot">Magasin Showroom → Dépôt Réserve</option>
+                            <option value="depot_to_shop">Dépôt Réserve → Magasin Showroom</option>
+                          </select>
+                        </div>
+                        <div><label class="field-label">Quantité *</label><input name="quantity" type="number" min="1" required value="1" class="input mono" /></div>
+                      </div>
+                      <div><label class="field-label">Note / Bon de Transfert</label><input name="notes" class="input" placeholder="Ex: Réapprovisionnement vitrine showroom..." /></div>
+                      <button type="submit" class="btn btn-pos" style="justify-content:center">Enregistrer Transfert (TRF)</button>
+                    </form>
+                  </div>
                 </div>
-                <div class="panel">
-                  <div class="panel-header"><span class="panel-title">Journal des Ajustements Stock</span></div>
-                  <div class="table-wrap">
-                    <table>
-                      <thead><tr><th>N° Pièce</th><th>Article</th><th>Variation</th><th>Motif</th></tr></thead>
-                      <tbody>
-                        ${state.stockAdjustments
-                          .map(
-                            (a) => `<tr>
-                              <td class="mono" style="font-size:11.5px;font-weight:700">${a.adj_number}<div style="font-size:10px;color:var(--ink-400)">${String(a.created_at || '').slice(0, 10)}</div></td>
-                              <td style="font-size:12px;font-weight:600">${a.product_name}</td>
-                              <td><span class="tag ${a.quantity_delta > 0 ? 'tag-ok' : 'tag-danger'} mono">${a.quantity_delta > 0 ? '+' : ''}${a.quantity_delta} (${a.stock_before} → ${a.stock_after})</span></td>
-                              <td style="font-size:11.5px;color:var(--ink-500)">${a.adj_type === 'damage' ? 'Casse: ' : ''}${a.reason || '—'}</td>
-                            </tr>`
-                          )
-                          .join('') || '<tr><td colspan="4" style="color:var(--ink-400);text-align:center;padding:24px">Aucun ajustement manuel enregistré.</td></tr>'}
-                      </tbody>
-                    </table>
+
+                <div class="grid-2" style="align-items:start">
+                  <div class="panel">
+                    <div class="panel-header"><span class="panel-title">Journal des Ajustements Stock</span></div>
+                    <div class="table-wrap">
+                      <table>
+                        <thead><tr><th>N° Pièce</th><th>Article</th><th>Variation</th><th>Motif</th></tr></thead>
+                        <tbody>
+                          ${state.stockAdjustments
+                            .map(
+                              (a) => `<tr>
+                                <td class="mono" style="font-size:11.5px;font-weight:700">${a.adj_number}<div style="font-size:10px;color:var(--ink-400)">${String(a.created_at || '').slice(0, 10)}</div></td>
+                                <td style="font-size:12px;font-weight:600">${a.product_name}</td>
+                                <td><span class="tag ${a.quantity_delta > 0 ? 'tag-ok' : 'tag-danger'} mono">${a.quantity_delta > 0 ? '+' : ''}${a.quantity_delta} (${a.stock_before} → ${a.stock_after})</span></td>
+                                <td style="font-size:11.5px;color:var(--ink-500)">${a.adj_type === 'damage' ? 'Casse: ' : ''}${a.reason || '—'}</td>
+                              </tr>`
+                            )
+                            .join('') || '<tr><td colspan="4" style="color:var(--ink-400);text-align:center;padding:24px">Aucun ajustement manuel enregistré.</td></tr>'}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div class="panel">
+                    <div class="panel-header"><span class="panel-title">Historique Transferts Multi-Dépôt (${state.stockTransfers.length})</span></div>
+                    <div class="table-wrap">
+                      <table>
+                        <thead><tr><th>N° TRF</th><th>Article</th><th>Direction</th><th>Qté</th></tr></thead>
+                        <tbody>
+                          ${state.stockTransfers
+                            .map(
+                              (tr) => `<tr>
+                                <td class="mono" style="font-size:11.5px;font-weight:700">${tr.transfer_number}<div style="font-size:10px;color:var(--ink-400)">${String(tr.created_at || '').slice(0, 10)}</div></td>
+                                <td style="font-size:12px;font-weight:600">${tr.product_name}<div style="font-size:10.5px;color:var(--ink-400)">${tr.notes || ''}</div></td>
+                                <td><span class="tag ${tr.direction === 'depot_to_shop' ? 'tag-ok' : ''}">${tr.direction === 'depot_to_shop' ? 'Dépôt → Magasin' : 'Magasin → Dépôt'}</span></td>
+                                <td class="mono" style="font-weight:700">${tr.quantity} u.</td>
+                              </tr>`
+                            )
+                            .join('') || '<tr><td colspan="4" style="color:var(--ink-400);text-align:center;padding:24px">Aucun transfert entre Showroom et Dépôt enregistré.</td></tr>'}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               </div>`
@@ -1707,15 +1945,33 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                       ${state.purchaseItems
                         .map((item, idx) => {
                           const prod = state.products.find((p) => p.id === item.product_id);
+                          const prevCost = prod ? Number(prod.current_cost_price || 0) : Number(item.previous_cost_price || 0);
+                          const uCost = Number(item.unit_cost || 0);
+                          const retailVal = Number(item.new_retail_price || 0);
+                          const costUp = prevCost > 0 && uCost > prevCost;
+                          const deltaPct = costUp ? Math.round(((uCost - prevCost) / prevCost) * 100) : 0;
+                          const marginPct = retailVal > 0 ? Math.round(((retailVal - uCost) / retailVal) * 100) : 0;
+                          const lowMargin = uCost > 0 && retailVal > 0 && marginPct < 12;
                           return `
-                            <div style="padding:12px;border:1px solid #e4e4e7;border-radius:5px;background:#fafafa">
-                              <div style="display:flex;justify-content:space-between;font-weight:600;color:#09090b;margin-bottom:8px;gap:8px;align-items:center">
+                            <div style="padding:12px;border:1px solid ${costUp || lowMargin ? '#f59e0b' : '#e4e4e7'};border-radius:6px;background:${costUp || lowMargin ? '#fffbeb' : '#fafafa'}">
+                              <div style="display:flex;justify-content:space-between;font-weight:600;color:#09090b;margin-bottom:8px;gap:8px;align-items:center;flex-wrap:wrap">
                                 <span>
                                   ${prod ? getProdName(prod) : `${item.product_name || 'Nouvel Article'} <span class="tag" style="background:#dbeafe;color:#1e40af;font-size:10px">Nouveau Produit</span>`}
                                   <span style="color:#71717a;font-weight:400">${prod ? `(Coût précédent : ${fmtMoney(prod.current_cost_price)})` : '(Sera créé dans le catalogue)'}</span>
                                 </span>
-                                <button type="button" class="btn-remove-pur-item" data-idx="${idx}" style="border:none;background:none;color:#b91c1c;cursor:pointer">Retirer</button>
+                                <div style="display:flex;align-items:center;gap:8px">
+                                  <span class="tag ${lowMargin ? 'tag-danger' : 'tag-ok'} mono" style="font-size:10px">Marge: ${marginPct}%</span>
+                                  <button type="button" class="btn-remove-pur-item" data-idx="${idx}" style="border:none;background:none;color:#b91c1c;cursor:pointer">Retirer</button>
+                                </div>
                               </div>
+                              ${
+                                costUp || lowMargin
+                                  ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;margin-bottom:8px;border-radius:6px;background:rgba(245,158,11,0.14);color:#92400e;font-size:11.5px;font-weight:600">
+                                      <span>${costUp ? `⚠️ Hausse coût fournisseur (+${deltaPct}% vs ${fmtMoney(prevCost)})` : `⚠️ Marge détail faible (${marginPct}%)`} — Pensez à ajuster vos tarifs de vente.</span>
+                                      <button type="button" class="btn btn-sm btn-auto-margin-item" data-idx="${idx}" style="height:24px;font-size:11px;background:#fff;border-color:#d97706;color:#92400e">Ajuster (+25% Détail / +12% Gros)</button>
+                                    </div>`
+                                  : ''
+                              }
                               <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
                                 <div>
                                   <label class="field-label">Quantité</label>
@@ -1991,109 +2247,370 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
     `;
   }
 
-  // 6. EXPENSES & CASHFLOW
+  // 6. TREASURY, MOROCCAN BANK CHECKS STUDIO (CREDIT AGRICOLE) & EXPENSES
   if (state.activeTab === 'expenses') {
     const d = state.dashboard;
+    const esub = state.expensesSubTab || 'checks';
+    const cs = state.checksStats || {};
+    const cf = state.checkForm || {};
+    const preset = MOROCCO_BANK_PRESETS[cf.bank_code || 'cam'] || MOROCCO_BANK_PRESETS.cam;
+    const amtNum = Number(cf.amount || 0);
+    const wordsText = cf.lang === 'ar' ? numberToArabicWords(amtNum) : numberToFrenchWords(amtNum);
+    const [wLine1, wLine2] = splitCheckWordsLines(wordsText, cf.lang === 'ar' ? 42 : 48);
+    const ox = Number(cf.offsetX || 0);
+    const oy = Number(cf.offsetY || 0);
+    const displayAmt = amtNum > 0
+      ? (cf.protect_marks ? `#${amtNum.toLocaleString('fr-MA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}#` : amtNum.toLocaleString('fr-MA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+      : '#0,00#';
+    const formattedDate = cf.issue_date ? cf.issue_date.split('-').reverse().join(' / ') : '';
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const plus7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
     return `
-      <div style="display:flex;flex-direction:column;gap:16px">
-        ${
-          d
-            ? `<div class="kpi-strip">
-                <div class="kpi-cell">
-                  <div class="kpi-label">Recettes Encaissées</div>
-                  <div class="kpi-val num">${fmtMoney(d.salesStats.totalCollected)}</div>
-                </div>
-                <div class="kpi-cell">
-                  <div class="kpi-label">Coût d'Achat Marchandises Vendues</div>
-                  <div class="kpi-val num">${fmtMoney(d.salesStats.totalCogs)}</div>
-                </div>
-                <div class="kpi-cell">
-                  <div class="kpi-label">Total Charges & Dépenses</div>
-                  <div class="kpi-val num" style="color:#b91c1c">-${fmtMoney(d.salesStats.totalExpenses)}</div>
-                </div>
-                <div class="kpi-cell">
-                  <div class="kpi-label">Bénéfice Net</div>
-                  <div class="kpi-val num" style="color:#166534">${fmtMoney(d.salesStats.netProfit)}</div>
-                </div>
-              </div>`
-            : ''
-        }
-
-        <div class="split-pos">
-          <div class="panel">
-            <div class="panel-header">
-              <span class="panel-title">Journal des Charges d'Exploitation (${state.expenses.length})</span>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Libellé</th>
-                    <th>Poste</th>
-                    <th style="text-align:end">Montant</th>
-                    <th style="text-align:end">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${state.expenses
-                    .map(
-                      (e) => `
-                    <tr>
-                      <td class="mono" style="font-size:11.5px;color:var(--ink-400)">${e.expense_date}</td>
-                      <td style="font-weight:600;color:var(--ink-900)">${e.title}</td>
-                      <td><span class="tag">${e.category}</span></td>
-                      <td class="num" style="text-align:end;font-weight:600;color:#b91c1c">-${fmtMoney(e.amount)}</td>
-                      <td style="text-align:end">
-                        <button class="btn btn-sm btn-icon btn-del-expense" data-id="${e.id}" title="Supprimer" style="color:#b91c1c">${ICONS.trash}</button>
-                      </td>
-                    </tr>
-                  `
-                    )
-                    .join('')}
-                </tbody>
-              </table>
-            </div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="subtab-bar" style="justify-content:space-between">
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" class="subtab-btn ${esub === 'checks' ? 'active' : ''}" data-esub="checks">
+              ${ICONS.check}<span>Chèques, Effets & Impression Crédit Agricole (${state.bankChecks.length})</span>
+            </button>
+            <button type="button" class="subtab-btn ${esub === 'expenses' ? 'active' : ''}" data-esub="expenses">
+              ${ICONS.expenses}<span>Charges & Dépenses d'Exploitation (${state.expenses.length})</span>
+            </button>
           </div>
-
-          <div class="panel">
-            <div class="panel-header">
-              <span class="panel-title">Saisir une Charge</span>
-            </div>
-            <form id="form-add-expense" class="panel-body" style="display:flex;flex-direction:column;gap:12px">
-              <div>
-                <label class="field-label">Libellé *</label>
-                <input name="title" required class="input" placeholder="ex: Facture Lydec, Loyer, Transport..." />
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-                <div>
-                  <label class="field-label">Catégorie</label>
-                  <select name="category" class="input">
-                    <option value="rent">Loyer</option>
-                    <option value="utilities">Électricité / Eau / Télécom</option>
-                    <option value="salaries">Salaires</option>
-                    <option value="transport">Transport & Livraison</option>
-                    <option value="marketing">Publicité</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="field-label">Montant (MAD) *</label>
-                  <input name="amount" type="number" required class="input mono" placeholder="0.00" />
-                </div>
-              </div>
-              <button type="submit" class="btn btn-dark" style="justify-content:center">Enregistrer la Dépense</button>
-            </form>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${(cs.overdueCount || 0) > 0 ? `<span class="tag tag-danger">${cs.overdueCount} en retard</span>` : ''}
+            ${(cs.dueSoonCount || 0) > 0 ? `<span class="tag tag-warn">${cs.dueSoonCount} échéance(s) &lt; 7j</span>` : ''}
           </div>
         </div>
+
+        ${
+          esub === 'checks'
+            ? `<div style="display:flex;flex-direction:column;gap:14px">
+                <div class="kpi-strip">
+                  <div class="kpi-cell">
+                    <div class="kpi-label">Chèques / Effets Émis en Cours</div>
+                    <div class="kpi-val num" style="color:#d97706">${fmtMoney(cs.totalIssuedPending || 0)}</div>
+                    <div class="kpi-sub">À provisionner sur compte bancaire</div>
+                  </div>
+                  <div class="kpi-cell">
+                    <div class="kpi-label">Chèques Clients à Encaisser</div>
+                    <div class="kpi-val num" style="color:#267d39">${fmtMoney(cs.totalReceivedPending || 0)}</div>
+                    <div class="kpi-sub">Portefeuille en attente</div>
+                  </div>
+                  <div class="kpi-cell">
+                    <div class="kpi-label">Alertes Échéances (≤ 7 jours)</div>
+                    <div class="kpi-val num" style="color:${(cs.overdueCount || 0) + (cs.dueSoonCount || 0) > 0 ? '#e21b1b' : '#267d39'}">${(cs.overdueCount || 0) + (cs.dueSoonCount || 0)}</div>
+                    <div class="kpi-sub">${cs.overdueCount || 0} dépassée(s) • ${cs.dueSoonCount || 0} cette semaine</div>
+                  </div>
+                  <div class="kpi-cell">
+                    <div class="kpi-label">Format Bank Al-Maghrib</div>
+                    <div class="kpi-val" style="font-size:16px">175 × 80 mm</div>
+                    <div class="kpi-sub">${preset.name}</div>
+                  </div>
+                </div>
+
+                <!-- MOROCCAN BANK CHECK PRINTER STUDIO -->
+                <div class="panel">
+                  <div class="panel-header" style="flex-wrap:wrap;gap:8px">
+                    <div>
+                      <span class="panel-title">Studio d'Impression Chèque & Effet Maroc (${preset.name})</span>
+                      <div style="font-size:11px;color:var(--ink-400)">Format officiel Bank Al-Maghrib 175 × 80 mm Paysage — Impression sans fond ni bande CMC7 (Style lbanka.com)</div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                      <button type="button" class="btn btn-sm" id="btn-reset-check-form">Nouveau Chèque</button>
+                      <button type="button" class="btn btn-sm btn-dark" id="btn-print-check-only">${ICONS.print}<span>Imprimer sur Chèque</span></button>
+                    </div>
+                  </div>
+                  <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
+                    <div style="display:grid;grid-template-columns:1.2fr 0.9fr 0.9fr 1fr;gap:10px">
+                      <div>
+                        <label class="field-label">Banque Marocaine (Gabarit)</label>
+                        <select id="chk-bank-code" class="input">
+                          ${Object.values(MOROCCO_BANK_PRESETS)
+                            .map((b) => `<option value="${b.code}" ${cf.bank_code === b.code ? 'selected' : ''}>${b.name}</option>`)
+                            .join('')}
+                        </select>
+                      </div>
+                      <div>
+                        <label class="field-label">Instrument</label>
+                        <select id="chk-inst-type" class="input">
+                          <option value="check" ${cf.instrument_type === 'check' ? 'selected' : ''}>Chèque Bancaire</option>
+                          <option value="effet" ${cf.instrument_type === 'effet' ? 'selected' : ''}>Effet / Traite (LCN)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="field-label">Sens Trésorerie</label>
+                        <select id="chk-direction" class="input">
+                          <option value="issued" ${cf.direction === 'issued' ? 'selected' : ''}>Émis (Fournisseur / Frais)</option>
+                          <option value="received" ${cf.direction === 'received' ? 'selected' : ''}>Reçu (Client)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="field-label">N° Chèque / Effet</label>
+                        <input id="chk-number" class="input mono" value="${cf.check_number || ''}" placeholder="ex: 4829104" />
+                      </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1.4fr 1fr 0.8fr 0.8fr 0.8fr;gap:10px">
+                      <div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                          <label class="field-label" style="margin:0">${cf.direction === 'received' ? 'Émetteur (Client)' : "À l'ordre de (Bénéficiaire) *"}</label>
+                          <select id="chk-quick-party" class="input" style="height:22px;width:145px;font-size:10.5px;padding:0 6px">
+                            <option value="">Choisir tiers...</option>
+                            ${state.suppliers.map((s) => `<option value="sup:${s.id}">${s.company || s.name}</option>`).join('')}
+                            ${state.customers.map((c) => `<option value="cust:${c.id}">${c.name}</option>`).join('')}
+                          </select>
+                        </div>
+                        <input id="chk-beneficiary" class="input" value="${cf.beneficiary_or_issuer || ''}" placeholder="Nom société ou personne..." />
+                      </div>
+                      <div>
+                        <label class="field-label">Montant (MAD) *</label>
+                        <input id="chk-amount" type="number" step="0.01" class="input mono" style="font-weight:800" value="${cf.amount || ''}" placeholder="0.00" />
+                      </div>
+                      <div>
+                        <label class="field-label">Fait à (Ville)</label>
+                        <input id="chk-city" class="input" value="${cf.issue_city || 'Casablanca'}" />
+                      </div>
+                      <div>
+                        <label class="field-label">Date Création</label>
+                        <input id="chk-issue-date" type="date" class="input mono" value="${cf.issue_date || todayStr}" />
+                      </div>
+                      <div>
+                        <label class="field-label">Date Échéance</label>
+                        <input id="chk-due-date" type="date" class="input mono" value="${cf.due_date || todayStr}" />
+                      </div>
+                    </div>
+
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;padding:8px 12px;background:var(--panel-subtle);border:1px solid var(--border);border-radius:8px">
+                      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:12px">
+                        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-weight:600">
+                          <input type="checkbox" id="chk-crossed" ${cf.is_crossed ? 'checked' : ''} /> Chèque Barré (//)
+                        </label>
+                        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-weight:600">
+                          <input type="checkbox" id="chk-non-endorsable" ${cf.non_endorsable ? 'checked' : ''} /> Non Endossable
+                        </label>
+                        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-weight:600">
+                          <input type="checkbox" id="chk-protect" ${cf.protect_marks ? 'checked' : ''} /> Protection (#...#)
+                        </label>
+                        <select id="chk-lang" class="input" style="height:28px;width:115px;font-size:11px">
+                          <option value="fr" ${cf.lang !== 'ar' ? 'selected' : ''}>Français (Lettres)</option>
+                          <option value="ar" ${cf.lang === 'ar' ? 'selected' : ''}>العربية (حروف)</option>
+                        </select>
+                        ${
+                          cf.supplier_id || cf.customer_id
+                            ? `<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-weight:700;color:#267d39">
+                                <input type="checkbox" id="chk-record-pay" ${cf.record_payment ? 'checked' : ''} /> Déduire du solde tiers
+                              </label>`
+                            : ''
+                        }
+                      </div>
+                      <div style="display:flex;gap:8px;align-items:center;font-size:11px">
+                        <span style="color:var(--ink-500);font-weight:700">Calibration (mm) :</span>
+                        <label>X <input id="chk-off-x" type="number" step="0.5" min="-20" max="20" class="input mono" style="width:58px;height:26px" value="${ox}" /></label>
+                        <label>Y <input id="chk-off-y" type="number" step="0.5" min="-20" max="20" class="input mono" style="width:58px;height:26px" value="${oy}" /></label>
+                      </div>
+                    </div>
+
+                    <!-- LIVE 175 x 80 MM MOROCCAN BANK CHECK CANVAS -->
+                    <div class="check-studio-wrap">
+                      <div id="printable-check-sheet" class="check-studio-canvas ${preset.cssClass || ''}">
+                        <div class="check-preview-chrome" style="position:absolute;top:4mm;left:32mm;display:flex;align-items:center;gap:8px;opacity:0.78">
+                          <span style="font-size:11px;font-weight:800;color:${preset.accent};letter-spacing:0.04em">${preset.name.toUpperCase()}</span>
+                          <span style="font-size:9px;padding:1px 6px;border-radius:4px;border:1px solid ${preset.accent};color:${preset.accent}">${preset.tag}</span>
+                        </div>
+                        <div class="check-preview-chrome" style="position:absolute;top:12.5mm;right:49mm;font-size:9.5px;color:#64748b">B.P. DH</div>
+                        <div class="check-preview-chrome" style="position:absolute;top:23mm;left:5mm;font-size:8.5px;color:#64748b">Payer contre ce chèque</div>
+                        <div class="check-preview-chrome" style="position:absolute;top:39mm;left:5mm;font-size:8.5px;color:#64748b">À l'ordre de</div>
+                        <div class="check-preview-chrome" style="position:absolute;top:48.5mm;left:85mm;font-size:8.5px;color:#64748b">À</div>
+                        <div class="check-preview-chrome" style="position:absolute;top:48.5mm;left:126mm;font-size:8.5px;color:#64748b">Le</div>
+
+                        ${
+                          cf.is_crossed
+                            ? `<svg class="check-crossed-lines" style="top:${4 + oy}mm;left:${6 + ox}mm" viewBox="0 0 80 60">
+                                <line x1="8" y1="54" x2="62" y2="6" stroke="#000" stroke-width="2.2" />
+                                <line x1="20" y1="56" x2="74" y2="8" stroke="#000" stroke-width="2.2" />
+                                ${cf.non_endorsable ? `<text x="16" y="42" transform="rotate(-38 35 35)" font-size="7.5" font-weight="800" fill="#000">NON ENDOSSABLE</text>` : ''}
+                              </svg>`
+                            : ''
+                        }
+
+                        <div class="check-field mono" style="top:${preset.amountTop + oy}mm;right:${preset.amountRight - ox}mm;font-size:13.5px;letter-spacing:0.5px">
+                          ${displayAmt}
+                        </div>
+
+                        <div class="check-field" dir="${cf.lang === 'ar' ? 'rtl' : 'ltr'}" style="top:${preset.words1Top + oy}mm;left:${preset.wordsLeft + ox}mm;font-size:11.5px;max-width:138mm;overflow:hidden">
+                          ${wLine1}
+                        </div>
+
+                        ${
+                          wLine2
+                            ? `<div class="check-field" dir="${cf.lang === 'ar' ? 'rtl' : 'ltr'}" style="top:${preset.words2Top + oy}mm;left:${12 + ox}mm;font-size:11.5px;max-width:152mm;overflow:hidden">
+                                ${wLine2}
+                              </div>`
+                            : ''
+                        }
+
+                        <div class="check-field" style="top:${preset.payTop + oy}mm;left:${preset.payLeft + ox}mm;font-size:12.5px;text-transform:uppercase">
+                          ${cf.beneficiary_or_issuer || '................................................'}
+                        </div>
+
+                        <div class="check-field" style="top:${preset.cityTop + oy}mm;left:${preset.cityLeft + ox}mm;font-size:11px">
+                          ${cf.issue_city || 'Casablanca'}
+                        </div>
+
+                        <div class="check-field mono" style="top:${preset.dateTop + oy}mm;left:${preset.dateLeft + ox}mm;font-size:11px">
+                          ${formattedDate}
+                        </div>
+
+                        <div class="check-preview-chrome check-cmc7-zone">
+                          ZONE MAGNÉTIQUE CMC7 RÉSERVÉE — NE RIEN IMPRIMER ICI • ÉCHELLE 100% (175 × 80 MM)
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+                      <button type="button" class="btn btn-dark" id="btn-save-check">Enregistrer dans l'Échéancier</button>
+                      <button type="button" class="btn btn-pos" id="btn-save-and-print-check">${ICONS.print}<span>Enregistrer & Imprimer Chèque CAM</span></button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- ÉCHÉANCIER TABLE -->
+                <div class="panel">
+                  <div class="panel-header">
+                    <span class="panel-title">Échéancier des Chèques & Effets (${state.bankChecks.length})</span>
+                    <span style="font-size:11.5px;color:var(--ink-400)">Suivez les dates d'encaissement / débit Crédit Agricole & évitez les rejets</span>
+                  </div>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Type & N°</th>
+                          <th>Banque</th>
+                          <th>Bénéficiaire / Émetteur</th>
+                          <th>Créé le → Échéance</th>
+                          <th style="text-align:end">Montant MAD</th>
+                          <th>Statut</th>
+                          <th style="text-align:end">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${state.bankChecks
+                          .map((ch) => {
+                            const due = String(ch.due_date || '');
+                            const isPending = ch.status === 'pending' || ch.status === 'deposited';
+                            const isOverdue = isPending && due < todayStr;
+                            const isSoon = isPending && !isOverdue && due <= plus7;
+                            return `
+                              <tr>
+                                <td>
+                                  <span class="tag ${ch.direction === 'issued' ? 'tag-warn' : 'tag-ok'}" style="font-size:10px">
+                                    ${ch.direction === 'issued' ? 'ÉMIS' : 'REÇU'} • ${ch.instrument_type === 'effet' ? 'Effet' : 'Chèque'}
+                                  </span>
+                                  <div class="mono" style="font-weight:700;margin-top:2px;font-size:11.5px">N° ${ch.check_number || '—'}</div>
+                                </td>
+                                <td style="font-size:12px;font-weight:600">${ch.bank_name}</td>
+                                <td>
+                                  <div style="font-weight:700;color:var(--ink-900)">${ch.beneficiary_or_issuer}</div>
+                                  <div style="font-size:10.5px;color:var(--ink-400)">${ch.is_crossed ? 'Barré' : 'Non barré'}${ch.non_endorsable ? ' • N.E' : ''} • ${ch.issue_city}</div>
+                                </td>
+                                <td class="mono" style="font-size:11.5px">
+                                  <div>${ch.issue_date} → <strong>${due}</strong></div>
+                                  ${isOverdue ? `<span class="tag tag-danger" style="font-size:9.5px;margin-top:2px">ÉCHÉANCE DÉPASSÉE</span>` : isSoon ? `<span class="tag tag-warn" style="font-size:9.5px;margin-top:2px">ÉCHÉANCE PROCHE</span>` : ''}
+                                </td>
+                                <td class="num" style="text-align:end;font-weight:800">${fmtMoney(ch.amount)}</td>
+                                <td>
+                                  <select class="input sel-check-status" data-id="${ch.id}" style="height:28px;font-size:11px;min-width:118px">
+                                    <option value="pending" ${ch.status === 'pending' ? 'selected' : ''}>En attente</option>
+                                    <option value="deposited" ${ch.status === 'deposited' ? 'selected' : ''}>Remis en banque</option>
+                                    <option value="cashed" ${ch.status === 'cashed' ? 'selected' : ''}>Encaissé / Payé</option>
+                                    <option value="rejected" ${ch.status === 'rejected' ? 'selected' : ''}>Rejeté / Impayé</option>
+                                  </select>
+                                </td>
+                                <td style="text-align:end">
+                                  <div class="action-group">
+                                    <button type="button" class="btn btn-sm btn-load-check" data-id="${ch.id}" title="Charger dans le studio d'impression">${ICONS.print}<span>Imprimer</span></button>
+                                    <button type="button" class="btn btn-sm btn-icon btn-del-check" data-id="${ch.id}" style="color:#e21b1b">${ICONS.trash}</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            `;
+                          })
+                          .join('') || '<tr><td colspan="7" style="text-align:center;color:var(--ink-400);padding:24px">Aucun chèque ou effet enregistré. Saisissez un chèque ci-dessus pour l’imprimer ou suivre son échéance.</td></tr>'}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>`
+            : `<div style="display:flex;flex-direction:column;gap:16px">
+                ${
+                  d
+                    ? `<div class="kpi-strip">
+                        <div class="kpi-cell"><div class="kpi-label">Recettes Encaissées</div><div class="kpi-val num">${fmtMoney(d.salesStats.totalCollected)}</div></div>
+                        <div class="kpi-cell"><div class="kpi-label">Coût d'Achat Marchandises Vendues</div><div class="kpi-val num">${fmtMoney(d.salesStats.totalCogs)}</div></div>
+                        <div class="kpi-cell"><div class="kpi-label">Total Charges & Dépenses</div><div class="kpi-val num" style="color:#b91c1c">-${fmtMoney(d.salesStats.totalExpenses)}</div></div>
+                        <div class="kpi-cell"><div class="kpi-label">Bénéfice Net</div><div class="kpi-val num" style="color:#166534">${fmtMoney(d.salesStats.netProfit)}</div></div>
+                      </div>`
+                    : ''
+                }
+
+                <div class="split-pos">
+                  <div class="panel">
+                    <div class="panel-header"><span class="panel-title">Journal des Charges d'Exploitation (${state.expenses.length})</span></div>
+                    <div class="table-wrap">
+                      <table>
+                        <thead><tr><th>Date</th><th>Libellé</th><th>Poste</th><th style="text-align:end">Montant</th><th style="text-align:end">Action</th></tr></thead>
+                        <tbody>
+                          ${state.expenses
+                            .map(
+                              (e) => `
+                            <tr>
+                              <td class="mono" style="font-size:11.5px;color:var(--ink-400)">${e.expense_date}</td>
+                              <td style="font-weight:600;color:var(--ink-900)">${e.title}</td>
+                              <td><span class="tag">${e.category}</span></td>
+                              <td class="num" style="text-align:end;font-weight:600;color:#b91c1c">-${fmtMoney(e.amount)}</td>
+                              <td style="text-align:end"><button class="btn btn-sm btn-icon btn-del-expense" data-id="${e.id}" title="Supprimer" style="color:#b91c1c">${ICONS.trash}</button></td>
+                            </tr>`
+                            )
+                            .join('')}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div class="panel">
+                    <div class="panel-header"><span class="panel-title">Saisir une Charge</span></div>
+                    <form id="form-add-expense" class="panel-body" style="display:flex;flex-direction:column;gap:12px">
+                      <div><label class="field-label">Libellé *</label><input name="title" required class="input" placeholder="ex: Facture Lydec, Loyer, Transport..." /></div>
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                        <div>
+                          <label class="field-label">Catégorie</label>
+                          <select name="category" class="input">
+                            <option value="rent">Loyer</option>
+                            <option value="utilities">Électricité / Eau / Télécom</option>
+                            <option value="salaries">Salaires</option>
+                            <option value="transport">Transport & Livraison</option>
+                            <option value="marketing">Publicité</option>
+                          </select>
+                        </div>
+                        <div><label class="field-label">Montant (MAD) *</label><input name="amount" type="number" required class="input mono" placeholder="0.00" /></div>
+                      </div>
+                      <button type="submit" class="btn btn-dark" style="justify-content:center">Enregistrer la Dépense</button>
+                    </form>
+                  </div>
+                </div>
+              </div>`
+        }
       </div>
     `;
   }
 
-  // 7. WOOCOMMERCE, ANDROID WI-FI PAIRING & STORE SETTINGS (3 SUB-TABS)
+  // 7. WOOCOMMERCE, ANDROID WI-FI PAIRING & STORE SETTINGS (4 SUB-TABS)
   if (state.activeTab === 'connect') {
     const qrSvg = renderPairingQrSvg(state.networkInfo?.qrPayload || 'ELECTROZEN-POS-2026');
     const csub = state.connectSubTab || 'woo';
     const pendingWooCnt = state.products.filter((x) => x.woo_sync_status !== 'synced').length;
+    const pendingOrdersCnt = state.wooOrders.filter((o) => o.local_status !== 'converted').length;
 
     return `
       <div style="display:flex;flex-direction:column;gap:16px">
@@ -2102,11 +2619,14 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
             <button type="button" class="subtab-btn ${csub === 'woo' ? 'active' : ''}" data-csub="woo">
               ${ICONS.sync}<span>1. Boutique WooCommerce & Photos (${pendingWooCnt})</span>
             </button>
+            <button type="button" class="subtab-btn ${csub === 'orders' ? 'active' : ''}" data-csub="orders">
+              ${ICONS.pos}<span>2. Commandes Web (${pendingOrdersCnt})</span>
+            </button>
             <button type="button" class="subtab-btn ${csub === 'android' ? 'active' : ''}" data-csub="android">
-              ${ICONS.connect}<span>2. Terminaux Android Wi-Fi (${(state.networkInfo?.pairedDevices || []).length})</span>
+              ${ICONS.connect}<span>3. Terminaux Android Wi-Fi (${(state.networkInfo?.pairedDevices || []).length})</span>
             </button>
             <button type="button" class="subtab-btn ${csub === 'settings' ? 'active' : ''}" data-csub="settings">
-              ${ICONS.edit}<span>3. Enseigne, IA & Sauvegardes</span>
+              ${ICONS.edit}<span>4. Enseigne, IA & Sauvegardes</span>
             </button>
           </div>
           <button type="button" class="btn btn-sm" id="btn-backup-db">${ICONS.download}<span>Backup SQLite</span></button>
@@ -2271,6 +2791,68 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                   </div>
                 </div>
               </div>`
+            : csub === 'orders'
+              ? `<div class="panel">
+                  <div class="panel-header" style="flex-wrap:wrap;gap:10px">
+                    <div>
+                      <span class="panel-title">Synchronisation Commandes Web WooCommerce → Caisse POS (${state.wooOrders.length})</span>
+                      <div style="font-size:11px;color:var(--ink-400)">Importez vos commandes clients electrozen.ma, contactez par WhatsApp et convertissez en facture POS avec déduction stock automatique.</div>
+                    </div>
+                    <button type="button" class="btn btn-primary" id="btn-pull-woo-orders" ${state.wooOrdersPullLoading ? 'disabled' : ''}>
+                      ${ICONS.sync}<span>${state.wooOrdersPullLoading ? 'Import en cours...' : 'Importer Commandes WooCommerce'}</span>
+                    </button>
+                  </div>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>N° Commande Web</th>
+                          <th>Client & Livraison</th>
+                          <th>Articles Commandés</th>
+                          <th style="text-align:end">Total TTC</th>
+                          <th>Statut</th>
+                          <th style="text-align:end">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${state.wooOrders
+                          .map((ord) => {
+                            const itemsHtml = (ord.items || [])
+                              .map((it) => `<div style="font-size:11.5px">• <strong>${it.quantity}x</strong> ${it.product_name} ${it.product_id ? `<span class="tag tag-ok" style="font-size:9px;padding:0 5px">Lié</span>` : `<span class="tag tag-warn" style="font-size:9px;padding:0 5px">Non lié</span>`}</div>`)
+                              .join('');
+                            return `
+                              <tr>
+                                <td class="mono">
+                                  <div style="font-weight:800;color:var(--ink-900)">#${ord.order_number}</div>
+                                  <div style="font-size:10.5px;color:var(--ink-400)">${String(ord.order_date || '').slice(0, 16)}</div>
+                                  <div style="font-size:10px;color:var(--ink-500)">${ord.payment_method_title || ''}</div>
+                                </td>
+                                <td>
+                                  <div style="font-weight:700;color:var(--ink-900)">${ord.customer_name}</div>
+                                  <div class="mono" style="font-size:11px;color:var(--ink-500)">${ord.customer_phone || '—'} • ${ord.customer_city || ''}</div>
+                                  <div style="font-size:11px;color:var(--ink-400)">${ord.customer_address || ''}</div>
+                                </td>
+                                <td style="max-width:260px">${itemsHtml || '—'}</td>
+                                <td class="num" style="text-align:end;font-weight:800">${fmtMoney(ord.total_amount)}</td>
+                                <td>
+                                  <span class="tag ${ord.local_status === 'converted' ? 'tag-ok' : 'tag-warn'}">
+                                    ${ord.local_status === 'converted' ? 'Validée POS' : `Web: ${ord.status}`}
+                                  </span>
+                                </td>
+                                <td style="text-align:end">
+                                  <div class="action-group">
+                                    ${ord.customer_phone ? `<button type="button" class="btn btn-sm btn-whatsapp-woo-ord" data-id="${ord.id}" style="background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.35);color:#047857">${ICONS.whatsapp}<span>WA</span></button>` : ''}
+                                    ${ord.local_status !== 'converted' ? `<button type="button" class="btn btn-sm btn-pos btn-convert-woo-ord" data-id="${ord.id}">Valider → Facture</button>` : ''}
+                                  </div>
+                                </td>
+                              </tr>
+                            `;
+                          })
+                          .join('') || '<tr><td colspan="6" style="text-align:center;color:var(--ink-400);padding:26px">Aucune commande Web importée. Cliquez sur « Imprimer / Importer Commandes WooCommerce » ci-dessus.</td></tr>'}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>`
             : csub === 'android'
               ? `<div class="panel">
                   <div class="panel-header">
@@ -2494,6 +3076,7 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                           <td style="text-align:end">
                             <div class="action-group">
                               <button class="btn btn-sm btn-print-quote" data-id="${q.id}">${ICONS.print}<span>Imprimer</span></button>
+                              <button class="btn btn-sm btn-whatsapp-quote" data-id="${q.id}" style="background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.35);color:#047857">${ICONS.whatsapp}<span>WA</span></button>
                               ${q.status !== 'converted' ? `<button class="btn btn-sm btn-pos btn-convert-quote" data-id="${q.id}">Convertir → Vente</button>` : ''}
                               ${isAdmin ? `<button class="btn btn-sm btn-icon btn-del-quote" data-id="${q.id}" style="color:#e21b1b">${ICONS.trash}</button>` : ''}
                             </div>
@@ -2506,67 +3089,125 @@ function renderActiveTab(t, categories, filteredProducts, posTotal, effectivePai
                   </table>
                 </div>
               </div>`
-            : `<div class="grid-2" style="align-items:start">
-                <div class="panel">
-                  <div class="panel-header"><span class="panel-title">Nouveau Ticket Réparation / SAV</span></div>
-                  <form id="form-new-sav" class="panel-body" style="display:flex;flex-direction:column;gap:10px">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-                      <div><label class="field-label">Client *</label><input name="customer_name" required class="input" placeholder="Nom complet" /></div>
-                      <div><label class="field-label">Téléphone</label><input name="customer_phone" class="input mono" placeholder="06..." /></div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-                      <div><label class="field-label">Appareil / Modèle *</label><input name="device_name" required class="input" placeholder="Ex: Trottinette KuKirin G2 / TV TCL" /></div>
-                      <div><label class="field-label">N° Série / IMEI</label><input name="serial_number" class="input mono" /></div>
-                    </div>
-                    <div><label class="field-label">Panne / Problème constaté</label><textarea name="issue_description" rows="2" class="input" placeholder="Décrivez la panne..."></textarea></div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-                      <div><label class="field-label">Coût Pièces (MAD)</label><input name="parts_cost" type="number" step="0.01" class="input mono" value="0" /></div>
-                      <div><label class="field-label">Main d'œuvre (MAD)</label><input name="labor_price" type="number" step="0.01" class="input mono" value="150" /></div>
-                      <div><label class="field-label">Avance payée (MAD)</label><input name="paid_amount" type="number" step="0.01" class="input mono" value="0" /></div>
-                    </div>
-                    <button type="submit" class="btn btn-dark" style="justify-content:center">Créer Ticket SAV Atelier</button>
-                  </form>
+            : `<div style="display:flex;flex-direction:column;gap:14px">
+                <!-- INSTANT WARRANTY LOOKUP BY S/N, INVOICE OR PHONE -->
+                <div class="panel" style="border-color:var(--primary-3);background:var(--primary-4)">
+                  <div class="panel-header">
+                    <span class="panel-title">Vérificateur Instantané de Garantie SAV (N° Série / IMEI / Facture FAC / Téléphone)</span>
+                  </div>
+                  <div class="panel-body" style="display:flex;flex-direction:column;gap:10px">
+                    <form id="form-warranty-lookup" style="display:flex;gap:8px;flex-wrap:wrap">
+                      <input id="input-warranty-query" class="input mono" style="flex:1;min-width:240px" value="${state.warrantyLookupQuery || ''}" placeholder="Ex: FAC-2026-000012, S/N, EAN ou 0661..." />
+                      <button type="submit" class="btn btn-dark">${ICONS.search}<span>Vérifier Garantie</span></button>
+                    </form>
+                    ${
+                      Array.isArray(state.warrantyLookupResults)
+                        ? state.warrantyLookupResults.length === 0
+                          ? `<div style="font-size:12px;color:#b91c1c;font-weight:600">Aucune vente correspondante trouvée pour « ${state.warrantyLookupQuery} ».</div>`
+                          : `<div class="table-wrap" style="background:var(--panel-bg);border-radius:8px">
+                              <table>
+                                <thead><tr><th>Facture & Date</th><th>Client</th><th>Appareil & S/N</th><th>Fin Garantie</th><th style="text-align:end">Action</th></tr></thead>
+                                <tbody>
+                                  ${state.warrantyLookupResults
+                                    .map(
+                                      (w, wIdx) => `<tr>
+                                        <td class="mono" style="font-size:11.5px;font-weight:700">${w.invoice_number}<div style="font-size:10px;color:var(--ink-400)">${String(w.sold_at || '').slice(0, 10)}</div></td>
+                                        <td><div style="font-weight:600">${w.customer_name}</div><div class="mono" style="font-size:10.5px;color:var(--ink-400)">${w.customer_phone || '—'}</div></td>
+                                        <td><div style="font-weight:600">${w.product_name}</div><div class="mono" style="font-size:10.5px;color:#6d28d9">${w.serial_number ? `S/N: ${w.serial_number}` : `EAN: ${w.barcode}`}</div></td>
+                                        <td><span class="tag ${w.is_under_warranty ? 'tag-ok' : 'tag-danger'}">${w.is_under_warranty ? `SOUS GARANTIE (${w.days_remaining} j)` : `EXPIRÉE (${w.warranty_expires_at || ''})`}</span></td>
+                                        <td style="text-align:end"><button type="button" class="btn btn-sm btn-pos btn-prefill-sav" data-widx="${wIdx}">+ Ouvrir Ticket SAV</button></td>
+                                      </tr>`
+                                    )
+                                    .join('')}
+                                </tbody>
+                              </table>
+                            </div>`
+                        : ''
+                    }
+                  </div>
                 </div>
 
-                <div class="panel">
-                  <div class="panel-header"><span class="panel-title">Suivi Atelier SAV (${state.serviceJobs.length})</span></div>
-                  <div class="table-wrap">
-                    <table>
-                      <thead><tr><th>Ticket / Client</th><th>Appareil</th><th>Statut</th><th style="text-align:end">Total / Payé</th></tr></thead>
-                      <tbody>
-                        ${state.serviceJobs
-                          .map((j) => {
-                            const st = statusLabels[j.status] || statusLabels.pending;
-                            return `
-                              <tr>
-                                <td>
-                                  <div class="mono" style="font-weight:700;color:var(--ink-900)">${j.ticket_number}</div>
-                                  <div style="font-size:12px;font-weight:600">${j.customer_name}</div>
-                                  <div class="mono" style="font-size:10.5px;color:var(--ink-400)">${j.customer_phone}</div>
-                                </td>
-                                <td>
-                                  <div style="font-weight:600;color:var(--ink-900)">${j.device_name}</div>
-                                  <div style="font-size:11px;color:var(--ink-400)">${j.issue_description || ''}</div>
-                                </td>
-                                <td>
-                                  <span class="tag ${st.cls}" style="margin-bottom:4px;display:inline-flex">${st.text}</span>
-                                  <select class="input sel-sav-status" data-id="${j.id}" style="height:28px;font-size:11px;margin-top:4px">
-                                    <option value="pending" ${j.status === 'pending' ? 'selected' : ''}>En attente</option>
-                                    <option value="in_progress" ${j.status === 'in_progress' ? 'selected' : ''}>En réparation</option>
-                                    <option value="ready" ${j.status === 'ready' ? 'selected' : ''}>Prêt</option>
-                                    <option value="delivered" ${j.status === 'delivered' ? 'selected' : ''}>Livré & Payé</option>
-                                  </select>
-                                </td>
-                                <td class="num" style="text-align:end">
-                                  <div style="font-weight:700">${fmtMoney(j.total_price)}</div>
-                                  <div style="font-size:11px;color:#267d39">Payé: ${fmtMoney(j.paid_amount)}</div>
-                                </td>
-                              </tr>
-                            `;
-                          })
-                          .join('') || '<tr><td colspan="4" style="color:var(--ink-400);text-align:center;padding:24px">Aucun ticket SAV en cours.</td></tr>'}
-                      </tbody>
-                    </table>
+                <div class="grid-2" style="align-items:start">
+                  <div class="panel">
+                    <div class="panel-header"><span class="panel-title">Nouveau Ticket Réparation / SAV</span></div>
+                    <form id="form-new-sav" class="panel-body" style="display:flex;flex-direction:column;gap:10px">
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                        <div><label class="field-label">Client *</label><input name="customer_name" required class="input" value="${state.savPrefill?.customer_name || ''}" placeholder="Nom complet" /></div>
+                        <div><label class="field-label">Téléphone (WhatsApp)</label><input name="customer_phone" class="input mono" value="${state.savPrefill?.customer_phone || ''}" placeholder="06..." /></div>
+                      </div>
+                      <div style="display:grid;grid-template-columns:1.2fr 1fr 0.8fr;gap:8px">
+                        <div><label class="field-label">Appareil / Modèle *</label><input name="device_name" required class="input" value="${state.savPrefill?.device_name || ''}" placeholder="Ex: TV Samsung / Lave-linge" /></div>
+                        <div><label class="field-label">N° Série / IMEI</label><input name="serial_number" class="input mono" value="${state.savPrefill?.serial_number || ''}" /></div>
+                        <div><label class="field-label">N° Facture Réf.</label><input name="invoice_number" class="input mono" value="${state.savPrefill?.invoice_number || ''}" placeholder="FAC-..." /></div>
+                      </div>
+                      <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:8px;align-items:end">
+                        <div><label class="field-label">Accessoires remis</label><input name="accessories_received" class="input" placeholder="Ex: Télécommande, câble, boîte..." /></div>
+                        <label style="display:flex;align-items:center;gap:6px;padding:8px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:12px;font-weight:700">
+                          <input type="checkbox" name="under_warranty" ${state.savPrefill?.under_warranty ? 'checked' : ''} /> Sous Garantie (0 MAD)
+                        </label>
+                      </div>
+                      <div><label class="field-label">Panne / Problème constaté</label><textarea name="issue_description" rows="2" class="input" placeholder="Décrivez la panne..."></textarea></div>
+                      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+                        <div><label class="field-label">Coût Pièces (MAD)</label><input name="parts_cost" type="number" step="0.01" class="input mono" value="0" /></div>
+                        <div><label class="field-label">Main d'œuvre (MAD)</label><input name="labor_price" type="number" step="0.01" class="input mono" value="${state.savPrefill?.under_warranty ? '0' : '150'}" /></div>
+                        <div><label class="field-label">Avance payée (MAD)</label><input name="paid_amount" type="number" step="0.01" class="input mono" value="0" /></div>
+                      </div>
+                      <button type="submit" class="btn btn-dark" style="justify-content:center">Créer Ticket SAV Atelier</button>
+                    </form>
+                  </div>
+
+                  <div class="panel">
+                    <div class="panel-header"><span class="panel-title">Suivi Atelier SAV (${state.serviceJobs.length})</span></div>
+                    <div class="table-wrap">
+                      <table>
+                        <thead><tr><th>Ticket / Client</th><th>Appareil & Garantie</th><th>Atelier / RMA Fournisseur</th><th style="text-align:end">Actions</th></tr></thead>
+                        <tbody>
+                          ${state.serviceJobs
+                            .map((j) => {
+                              const st = statusLabels[j.status] || statusLabels.pending;
+                              return `
+                                <tr>
+                                  <td>
+                                    <div class="mono" style="font-weight:700;color:var(--ink-900)">${j.ticket_number}</div>
+                                    <div style="font-size:12px;font-weight:600">${j.customer_name}</div>
+                                    <div class="mono" style="font-size:10.5px;color:var(--ink-400)">${j.customer_phone || ''}</div>
+                                  </td>
+                                  <td>
+                                    <div style="font-weight:600;color:var(--ink-900)">${j.device_name}</div>
+                                    <div style="font-size:11px;color:var(--ink-400)">${j.issue_description || ''}</div>
+                                    <div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap">
+                                      ${j.under_warranty ? `<span class="tag tag-ok" style="font-size:9.5px">Sous Garantie</span>` : `<span class="tag" style="font-size:9.5px">${fmtMoney(j.total_price)}</span>`}
+                                      ${j.invoice_number ? `<span class="tag mono" style="font-size:9.5px">${j.invoice_number}</span>` : ''}
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <span class="tag ${st.cls}" style="margin-bottom:4px;display:inline-flex">${st.text}</span>
+                                    <select class="input sel-sav-status" data-id="${j.id}" style="height:26px;font-size:11px;margin-top:3px">
+                                      <option value="pending" ${j.status === 'pending' ? 'selected' : ''}>En attente</option>
+                                      <option value="in_progress" ${j.status === 'in_progress' ? 'selected' : ''}>En réparation</option>
+                                      <option value="ready" ${j.status === 'ready' ? 'selected' : ''}>Prêt</option>
+                                      <option value="delivered" ${j.status === 'delivered' ? 'selected' : ''}>Livré & Payé</option>
+                                    </select>
+                                    <select class="input sel-sav-rma" data-id="${j.id}" style="height:26px;font-size:10.5px;margin-top:4px" title="Suivi retour fournisseur / RMA">
+                                      <option value="none" ${(j.supplier_rma_status || 'none') === 'none' ? 'selected' : ''}>RMA: Atelier interne</option>
+                                      <option value="sent_supplier" ${j.supplier_rma_status === 'sent_supplier' ? 'selected' : ''}>RMA: Envoyé fournisseur</option>
+                                      <option value="replaced" ${j.supplier_rma_status === 'replaced' ? 'selected' : ''}>RMA: Échangé / Remplacé</option>
+                                      <option value="returned" ${j.supplier_rma_status === 'returned' ? 'selected' : ''}>RMA: Reçu du fournisseur</option>
+                                    </select>
+                                  </td>
+                                  <td style="text-align:end">
+                                    <div class="action-group" style="justify-content:flex-end">
+                                      <button type="button" class="btn btn-sm btn-print-sav" data-id="${j.id}" title="Imprimer Reçu Dépôt SAV">${ICONS.print}</button>
+                                      <button type="button" class="btn btn-sm btn-whatsapp-sav" data-id="${j.id}" style="background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.35);color:#047857" title="Notifier client par WhatsApp">${ICONS.whatsapp}</button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              `;
+                            })
+                            .join('') || '<tr><td colspan="4" style="color:var(--ink-400);text-align:center;padding:24px">Aucun ticket SAV en cours.</td></tr>'}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               </div>`
@@ -3257,26 +3898,30 @@ function renderProductPicturesModal() {
 function renderPrintableInvoiceModal() {
   const s = state.printableSale;
   if (!s) return '';
-  const isThermal = state.printFormat === 'thermal';
+  const isThermal80 = state.printFormat === 'thermal';
+  const isThermal58 = state.printFormat === 'thermal58';
+  const isThermal = isThermal80 || isThermal58;
 
   return `
     <div class="modal-backdrop">
-      <div class="modal-box" style="max-width:740px">
-        <div class="modal-header">
-          <div style="display:flex;align-items:center;gap:10px">
+      <div class="modal-box" style="max-width:780px">
+        <div class="modal-header" style="flex-wrap:wrap;gap:8px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-weight:600;color:#09090b">Document — ${s.invoice_number}</span>
             <div class="segmented">
-              <button type="button" class="seg-btn ${!isThermal ? 'active' : ''}" id="btn-fmt-a4">Facture A4 + Garantie</button>
-              <button type="button" class="seg-btn ${isThermal ? 'active' : ''}" id="btn-fmt-thermal">Ticket 80mm</button>
+              <button type="button" class="seg-btn ${state.printFormat === 'a4' ? 'active' : ''}" id="btn-fmt-a4">Facture A4 + Garantie</button>
+              <button type="button" class="seg-btn ${isThermal80 ? 'active' : ''}" id="btn-fmt-thermal">Ticket 80mm</button>
+              <button type="button" class="seg-btn ${isThermal58 ? 'active' : ''}" id="btn-fmt-thermal58">Ticket 58mm</button>
             </div>
           </div>
           <div style="display:flex;gap:8px">
+            <button type="button" class="btn btn-sm" id="btn-whatsapp-invoice" style="background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.35);color:#047857">${ICONS.whatsapp}<span>WhatsApp</span></button>
             <button class="btn btn-sm btn-dark" id="btn-trigger-print">${ICONS.print} Imprimer</button>
             <button class="btn btn-sm" id="btn-close-print">Fermer</button>
           </div>
         </div>
         <div class="modal-body" style="background:#f4f4f5;display:flex;justify-content:center">
-          <div id="printable-invoice" style="background:#fff;color:#09090b;padding:${isThermal ? '16px' : '28px'};width:${isThermal ? '310px' : '100%'};border:1px solid #e4e4e7">
+          <div id="printable-invoice" style="background:#fff;color:#09090b;padding:${isThermal58 ? '10px' : isThermal80 ? '16px' : '28px'};width:${isThermal58 ? '215px' : isThermal80 ? '310px' : '100%'};border:1px solid #e4e4e7">
             <div style="display:flex;flex-direction:${isThermal ? 'column' : 'row'};justify-content:space-between;border-bottom:2px solid #09090b;padding-bottom:12px;gap:8px">
               <div>
                 <h2 style="font-size:${isThermal ? '15px' : '18px'};font-weight:800">${state.settings.store_name}</h2>
@@ -3356,27 +4001,43 @@ function renderPrintableInvoiceModal() {
 function renderBarcodeLabelModal() {
   const p = state.barcodeLabelProduct;
   if (!p) return '';
+  const copies = Math.max(1, Math.min(40, Number(state.barcodeLabelCopies || 1)));
+  const fmt = state.barcodeLabelFormat || '50x30';
+  const wPx = fmt === '40x20' ? 230 : 300;
+  const stickerHtml = `
+    <div class="label-sticker-item" style="width:${wPx}px;padding:${fmt === '40x20' ? '10px' : '16px'}">
+      <div style="font-size:${fmt === '40x20' ? '9.5px' : '11px'};font-weight:700;text-transform:uppercase;color:#52525b">${p.brand} • ${p.model_number || p.sku}</div>
+      <div style="font-size:${fmt === '40x20' ? '11.5px' : '13px'};font-weight:700;margin:3px 0 6px;color:#09090b">${getProdName(p)}</div>
+      <div style="display:flex;justify-content:center;margin:4px 0">
+        ${renderLinearBarcodeSvg(p.barcode)}
+      </div>
+      <div class="mono" style="font-size:${fmt === '40x20' ? '10px' : '11.5px'};letter-spacing:2px;font-weight:600">${p.barcode}</div>
+      <div class="num" style="font-size:${fmt === '40x20' ? '16px' : '20px'};font-weight:800;margin-top:6px;border-top:1px solid #e4e4e7;padding-top:5px">
+        ${fmtMoney(p.retail_price)}
+      </div>
+    </div>
+  `;
   return `
     <div class="modal-backdrop">
-      <div class="modal-box" style="max-width:460px">
-        <div class="modal-header">
-          <span style="font-weight:600;color:#09090b">Étiquette Code-Barres & Prix</span>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-sm btn-dark" onclick="window.print()">${ICONS.print} Imprimer Étiquette</button>
+      <div class="modal-box" style="max-width:680px">
+        <div class="modal-header" style="flex-wrap:wrap;gap:8px">
+          <span style="font-weight:700;color:#09090b">Étiquettes Code-Barres & Prix</span>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <select id="select-label-format" class="input" style="height:28px;width:130px;font-size:11px">
+              <option value="50x30" ${fmt === '50x30' ? 'selected' : ''}>Standard 50×30mm</option>
+              <option value="40x20" ${fmt === '40x20' ? 'selected' : ''}>Compact 40×20mm</option>
+            </select>
+            <select id="select-label-copies" class="input mono" style="height:28px;width:95px;font-size:11px">
+              ${[1, 2, 4, 6, 10, 20].map((c) => `<option value="${c}" ${copies === c ? 'selected' : ''}>${c} copie${c > 1 ? 's' : ''}</option>`).join('')}
+            </select>
+            <button type="button" class="btn btn-sm" id="btn-label-gen-ean" title="Générer et sauvegarder un code EAN-13 interne">${ICONS.barcode}<span>Nouv. EAN-13</span></button>
+            <button class="btn btn-sm btn-dark" onclick="window.print()">${ICONS.print} Imprimer (${copies})</button>
             <button class="btn btn-sm" id="btn-close-label">Fermer</button>
           </div>
         </div>
         <div class="modal-body" style="background:#f4f4f5;display:flex;justify-content:center">
-          <div id="printable-invoice" style="background:#fff;color:#09090b;padding:18px;border:1px solid #d4d4d8;width:320px;text-align:center">
-            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#52525b">${p.brand} • ${p.model_number || p.sku}</div>
-            <div style="font-size:13px;font-weight:700;margin:4px 0 8px;color:#09090b">${getProdName(p)}</div>
-            <div style="display:flex;justify-content:center;margin:6px 0">
-              ${renderLinearBarcodeSvg(p.barcode)}
-            </div>
-            <div class="mono" style="font-size:11.5px;letter-spacing:2px;font-weight:600">${p.barcode}</div>
-            <div class="num" style="font-size:20px;font-weight:800;margin-top:8px;border-top:1px solid #e4e4e7;padding-top:6px">
-              ${fmtMoney(p.retail_price)}
-            </div>
+          <div id="printable-invoice" class="label-sticker-grid" style="background:transparent;padding:8px">
+            ${Array.from({ length: copies }).map(() => stickerHtml).join('')}
           </div>
         </div>
       </div>
@@ -3628,6 +4289,7 @@ function renderPosExtraModals() {
           <div class="modal-header">
             <span style="font-weight:700">Devis Proforma — ${q.quote_number}</span>
             <div class="action-group">
+              <button type="button" class="btn btn-sm" id="btn-whatsapp-quote-modal" style="background:rgba(16,185,129,0.12);border-color:rgba(16,185,129,0.35);color:#047857">${ICONS.whatsapp}<span>WhatsApp</span></button>
               <button class="btn btn-sm btn-dark" id="btn-print-quote-now">${ICONS.print} Imprimer Devis</button>
               <button class="btn btn-sm" id="btn-close-quote-print">Fermer</button>
             </div>
@@ -3645,6 +4307,52 @@ function renderPosExtraModals() {
               </table>
               <div style="text-align:right;margin-top:12px;font-size:14px"><strong>Total Devis TTC : ${fmtMoney(q.total_amount)}</strong></div>
               <div style="margin-top:10px;font-size:11px">Arrêté le présent devis à : <strong>${numberToFrenchWords(q.total_amount)}</strong> TTC.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  if (state.printableSav) {
+    const j = state.printableSav;
+    return `
+      <div class="modal-backdrop">
+        <div class="modal-box" style="max-width:560px">
+          <div class="modal-header">
+            <span style="font-weight:700">Reçu de Dépôt Atelier SAV — ${j.ticket_number}</span>
+            <div class="action-group">
+              <button type="button" class="btn btn-sm btn-dark" id="btn-print-sav-now">${ICONS.print} Imprimer Reçu</button>
+              <button type="button" class="btn btn-sm" id="btn-close-sav-print">Fermer</button>
+            </div>
+          </div>
+          <div class="modal-body" style="background:#f4f4f5;display:flex;justify-content:center">
+            <div id="printable-invoice" style="background:#fff;color:#09090b;padding:22px;border:1px solid #e4e4e7;width:100%">
+              <div style="display:flex;justify-content:space-between;border-bottom:2px solid #203361;padding-bottom:10px">
+                <div>
+                  <h2 style="font-size:16px;font-weight:800">${state.settings.store_name} — SAV</h2>
+                  <div style="font-size:10.5px;color:#52525b">${state.settings.store_address} • Tél: ${state.settings.store_phone}</div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-weight:800;color:#203361">BON DE DÉPÔT SAV</div>
+                  <div class="mono" style="font-weight:700">${j.ticket_number}</div>
+                  <div class="mono" style="font-size:10.5px">${String(j.created_at || '').slice(0, 16)}</div>
+                </div>
+              </div>
+              <div style="margin:12px 0;padding:10px;background:#fafafa;border:1px solid #e4e4e7;font-size:12px;line-height:1.5">
+                <div><strong>Client :</strong> ${j.customer_name} ${j.customer_phone ? `• Tél: ${j.customer_phone}` : ''}</div>
+                <div><strong>Appareil :</strong> ${j.device_name} ${j.serial_number ? `• S/N: <span class="mono">${j.serial_number}</span>` : ''}</div>
+                ${j.invoice_number ? `<div><strong>Facture d'achat :</strong> <span class="mono">${j.invoice_number}</span> (${j.under_warranty ? 'SOUS GARANTIE' : 'Hors garantie'})</div>` : ''}
+                ${j.accessories_received ? `<div><strong>Accessoires remis :</strong> ${j.accessories_received}</div>` : ''}
+                <div><strong>Panne signalée :</strong> ${j.issue_description || 'Diagnostic en cours'}</div>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:12.5px;padding:8px 0;border-top:1px dashed #d4d4d8">
+                <span>Estimation / Total : <strong>${fmtMoney(j.total_price)}</strong></span>
+                <span>Avance payée : <strong>${fmtMoney(j.paid_amount)}</strong></span>
+              </div>
+              <div style="margin-top:26px;display:flex;justify-content:space-between;font-size:11px;color:#52525b">
+                <span>Signature Client</span>
+                <span>Cachet Atelier ${state.settings.store_name}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -4213,6 +4921,39 @@ function attachEvents() {
     btnCloseLabel.onclick = () => {
       state.barcodeLabelProduct = null;
       render();
+    };
+  }
+  const selLabelFmt = document.getElementById('select-label-format');
+  if (selLabelFmt) {
+    selLabelFmt.onchange = (e) => {
+      state.barcodeLabelFormat = e.target.value;
+      render();
+    };
+  }
+  const selLabelCopies = document.getElementById('select-label-copies');
+  if (selLabelCopies) {
+    selLabelCopies.onchange = (e) => {
+      state.barcodeLabelCopies = Number(e.target.value) || 1;
+      render();
+    };
+  }
+  const btnLabelGenEan = document.getElementById('btn-label-gen-ean');
+  if (btnLabelGenEan) {
+    btnLabelGenEan.onclick = async () => {
+      const p = state.barcodeLabelProduct;
+      if (!p) return;
+      const newEan = generateInternalEan13();
+      const res = await fetch(`/api/products/${p.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode: newEan }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        state.barcodeLabelProduct = updated;
+        await loadAllData();
+        showToast(`Nouveau code EAN-13 assigné : ${newEan}`);
+      }
     };
   }
 
@@ -5062,6 +5803,25 @@ function attachEvents() {
     };
   });
 
+  document.querySelectorAll('.btn-whatsapp-sale').forEach((btn) => {
+    btn.onclick = () => {
+      const id = Number(btn.getAttribute('data-sale-id'));
+      const sale = state.sales.find((s) => s.id === id);
+      if (!sale) return;
+      sendWhatsAppMessage(sale.customer_phone || '', buildSaleWhatsAppMessage(sale), sale.customer_name);
+    };
+  });
+
+  const btnWaInvoice = document.getElementById('btn-whatsapp-invoice');
+  if (btnWaInvoice) {
+    btnWaInvoice.onclick = () => {
+      const sale = state.printableSale;
+      if (!sale) return;
+      const cust = state.customers.find((c) => Number(c.id) === Number(sale.customer_id));
+      sendWhatsAppMessage(sale.customer_phone || cust?.phone || '', buildSaleWhatsAppMessage(sale), sale.customer_name);
+    };
+  }
+
   document.querySelectorAll('.btn-cancel-sale').forEach((btn) => {
     btn.onclick = async () => {
       const id = Number(btn.getAttribute('data-sale-id'));
@@ -5087,6 +5847,14 @@ function attachEvents() {
   if (btnFmtThermal) {
     btnFmtThermal.onclick = () => {
       state.printFormat = 'thermal';
+      render();
+    };
+  }
+
+  const btnFmtThermal58 = document.getElementById('btn-fmt-thermal58');
+  if (btnFmtThermal58) {
+    btnFmtThermal58.onclick = () => {
+      state.printFormat = 'thermal58';
       render();
     };
   }
@@ -5132,6 +5900,19 @@ function attachEvents() {
     btn.onclick = () => {
       state.purchaseItems.splice(Number(btn.getAttribute('data-idx')), 1);
       render();
+    };
+  });
+
+  document.querySelectorAll('.btn-auto-margin-item').forEach((btn) => {
+    btn.onclick = () => {
+      const idx = Number(btn.getAttribute('data-idx'));
+      const it = state.purchaseItems[idx];
+      if (!it) return;
+      const cost = Number(it.unit_cost || 0);
+      it.new_wholesale_price = Math.round(cost * 1.12);
+      it.new_retail_price = Math.round(cost * 1.25);
+      render();
+      showToast('Tarifs Détail (+25%) & Gros (+12%) recalculés');
     };
   });
 
@@ -5593,6 +6374,249 @@ function attachEvents() {
   });
   const btnDashAddProd = document.getElementById('btn-dash-add-product');
   if (btnDashAddProd) btnDashAddProd.onclick = () => { openProductModalWith(null, false); render(); };
+  const btnDashOpenCheck = document.getElementById('btn-dash-open-check');
+  if (btnDashOpenCheck) {
+    btnDashOpenCheck.onclick = () => {
+      state.activeTab = 'expenses';
+      state.expensesSubTab = 'checks';
+      render();
+    };
+  }
+  const btnDashWooOrders = document.getElementById('btn-dash-woo-orders');
+  if (btnDashWooOrders) {
+    btnDashWooOrders.onclick = () => {
+      state.activeTab = 'connect';
+      state.connectSubTab = 'orders';
+      render();
+    };
+  }
+
+  // Treasury Checks Studio (Crédit Agricole du Maroc 175x80mm) & WooCommerce Web Orders
+  document.querySelectorAll('[data-esub]').forEach((b) => {
+    b.onclick = () => {
+      state.expensesSubTab = b.getAttribute('data-esub') || 'checks';
+      render();
+    };
+  });
+
+  const bindCheckField = (id, key, opts = {}) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const handler = () => {
+      const val = opts.checkbox ? el.checked : opts.number ? Number(el.value || 0) : el.value;
+      state.checkForm[key] = val;
+      if (key === 'bank_code') {
+        state.checkForm.bank_name = MOROCCO_BANK_PRESETS[val]?.name || 'Crédit Agricole du Maroc';
+      }
+      if (key === 'offsetX') localStorage.setItem('ez_check_offset_x', String(val));
+      if (key === 'offsetY') localStorage.setItem('ez_check_offset_y', String(val));
+      if (!opts.liveText) render();
+      else {
+        const activeId = document.activeElement?.id;
+        const pos = document.activeElement?.selectionStart;
+        render();
+        const restored = activeId ? document.getElementById(activeId) : null;
+        if (restored) {
+          restored.focus();
+          if (typeof pos === 'number' && restored.setSelectionRange) {
+            try { restored.setSelectionRange(pos, pos); } catch {}
+          }
+        }
+      }
+    };
+    if (opts.liveText) el.oninput = handler;
+    else el.onchange = handler;
+  };
+  bindCheckField('chk-bank-code', 'bank_code');
+  bindCheckField('chk-inst-type', 'instrument_type');
+  bindCheckField('chk-direction', 'direction');
+  bindCheckField('chk-number', 'check_number', { liveText: true });
+  bindCheckField('chk-beneficiary', 'beneficiary_or_issuer', { liveText: true });
+  bindCheckField('chk-amount', 'amount', { liveText: true });
+  bindCheckField('chk-city', 'issue_city', { liveText: true });
+  bindCheckField('chk-issue-date', 'issue_date');
+  bindCheckField('chk-due-date', 'due_date');
+  bindCheckField('chk-crossed', 'is_crossed', { checkbox: true });
+  bindCheckField('chk-non-endorsable', 'non_endorsable', { checkbox: true });
+  bindCheckField('chk-protect', 'protect_marks', { checkbox: true });
+  bindCheckField('chk-lang', 'lang');
+  bindCheckField('chk-record-pay', 'record_payment', { checkbox: true });
+  bindCheckField('chk-off-x', 'offsetX', { number: true });
+  bindCheckField('chk-off-y', 'offsetY', { number: true });
+
+  const selChkParty = document.getElementById('chk-quick-party');
+  if (selChkParty) {
+    selChkParty.onchange = () => {
+      const v = selChkParty.value || '';
+      if (v.startsWith('sup:')) {
+        const s = state.suppliers.find((x) => Number(x.id) === Number(v.slice(4)));
+        if (s) {
+          state.checkForm.direction = 'issued';
+          state.checkForm.supplier_id = s.id;
+          state.checkForm.customer_id = '';
+          state.checkForm.beneficiary_or_issuer = s.company || s.name;
+          if (!Number(state.checkForm.amount) && Number(s.balance_owed) > 0) state.checkForm.amount = s.balance_owed;
+          render();
+        }
+      } else if (v.startsWith('cust:')) {
+        const c = state.customers.find((x) => Number(x.id) === Number(v.slice(5)));
+        if (c) {
+          state.checkForm.direction = 'received';
+          state.checkForm.customer_id = c.id;
+          state.checkForm.supplier_id = '';
+          state.checkForm.beneficiary_or_issuer = c.name;
+          if (!Number(state.checkForm.amount) && Number(c.total_debt) > 0) state.checkForm.amount = c.total_debt;
+          render();
+        }
+      }
+    };
+  }
+
+  const resetCheckFormBtn = document.getElementById('btn-reset-check-form');
+  if (resetCheckFormBtn) {
+    resetCheckFormBtn.onclick = () => {
+      const today = new Date().toISOString().slice(0, 10);
+      state.checkForm = {
+        ...state.checkForm,
+        id: null,
+        bank_code: 'cam',
+        bank_name: 'Crédit Agricole du Maroc',
+        check_number: '',
+        beneficiary_or_issuer: '',
+        amount: '',
+        issue_date: today,
+        due_date: today,
+        supplier_id: '',
+        customer_id: '',
+        record_payment: false,
+      };
+      render();
+    };
+  }
+
+  const saveBankCheck = async (andPrint = false) => {
+    const cf = state.checkForm;
+    if (!cf.beneficiary_or_issuer?.trim() || !(Number(cf.amount) > 0)) {
+      showToast('Veuillez saisir le bénéficiaire et un montant > 0');
+      return;
+    }
+    const amt = Number(cf.amount);
+    const words = cf.lang === 'ar' ? numberToArabicWords(amt) : numberToFrenchWords(amt);
+    const res = await fetch('/api/checks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...cf, amount: amt, amount_words: words }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data.error || 'Erreur enregistrement chèque');
+      return;
+    }
+    await loadAllData();
+    showToast(`Chèque N° ${data.check_number || ''} enregistré dans l'échéancier`);
+    if (andPrint) printBankCheckNow();
+  };
+  const btnSaveChk = document.getElementById('btn-save-check');
+  if (btnSaveChk) btnSaveChk.onclick = () => saveBankCheck(false);
+  const btnSavePrintChk = document.getElementById('btn-save-and-print-check');
+  if (btnSavePrintChk) btnSavePrintChk.onclick = () => saveBankCheck(true);
+  const btnPrintChkOnly = document.getElementById('btn-print-check-only');
+  if (btnPrintChkOnly) btnPrintChkOnly.onclick = () => printBankCheckNow();
+
+  document.querySelectorAll('.sel-check-status').forEach((s) => {
+    s.onchange = async () => {
+      await fetch(`/api/checks/${s.getAttribute('data-id')}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: s.value }),
+      });
+      await loadAllData();
+      showToast('Statut du chèque mis à jour');
+    };
+  });
+  document.querySelectorAll('.btn-load-check').forEach((b) => {
+    b.onclick = () => {
+      const ch = state.bankChecks.find((x) => Number(x.id) === Number(b.getAttribute('data-id')));
+      if (!ch) return;
+      state.checkForm = {
+        ...state.checkForm,
+        bank_code: ch.bank_code || 'cam',
+        bank_name: ch.bank_name || 'Crédit Agricole du Maroc',
+        direction: ch.direction || 'issued',
+        instrument_type: ch.instrument_type || 'check',
+        check_number: ch.check_number || '',
+        beneficiary_or_issuer: ch.beneficiary_or_issuer || '',
+        amount: ch.amount || '',
+        issue_city: ch.issue_city || 'Casablanca',
+        issue_date: ch.issue_date || new Date().toISOString().slice(0, 10),
+        due_date: ch.due_date || new Date().toISOString().slice(0, 10),
+        is_crossed: Boolean(ch.is_crossed),
+        non_endorsable: Boolean(ch.non_endorsable),
+      };
+      render();
+      printBankCheckNow();
+    };
+  });
+  document.querySelectorAll('.btn-del-check').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Supprimer cet effet / chèque de l’échéancier ?')) return;
+      await fetch(`/api/checks/${b.getAttribute('data-id')}`, { method: 'DELETE' });
+      await loadAllData();
+      showToast('Chèque supprimé');
+    };
+  });
+
+  // WooCommerce Two-Way Orders handlers
+  const btnPullWooOrders = document.getElementById('btn-pull-woo-orders');
+  if (btnPullWooOrders) {
+    btnPullWooOrders.onclick = async () => {
+      state.wooOrdersPullLoading = true;
+      render();
+      try {
+        const res = await fetch('/api/woocommerce/orders/pull', { method: 'POST' });
+        const d = await res.json().catch(() => ({}));
+        state.wooOrdersPullLoading = false;
+        if (res.ok && d.success) {
+          await loadAllData();
+          showToast(`${d.pulledCount} commande(s) WooCommerce synchronisée(s)`);
+        } else {
+          render();
+          showToast(d.error || 'Échec import commandes WooCommerce');
+        }
+      } catch (err) {
+        state.wooOrdersPullLoading = false;
+        render();
+        showToast(`Erreur: ${err.message}`);
+      }
+    };
+  }
+  document.querySelectorAll('.btn-whatsapp-woo-ord').forEach((b) => {
+    b.onclick = () => {
+      const ord = state.wooOrders.find((o) => Number(o.id) === Number(b.getAttribute('data-id')));
+      if (!ord) return;
+      const msg = `Bonjour ${ord.customer_name},\nNous avons bien reçu votre commande web *#${ord.order_number}* chez *${state.settings.store_name || 'ELECTROZEN'}* (Total: ${fmtMoney(ord.total_amount)}).\nNous préparons votre colis pour livraison vers ${ord.customer_city || ord.customer_address || 'votre adresse'}. Merci !`;
+      sendWhatsAppMessage(ord.customer_phone, msg, ord.customer_name);
+    };
+  });
+  document.querySelectorAll('.btn-convert-woo-ord').forEach((b) => {
+    b.onclick = async () => {
+      const id = Number(b.getAttribute('data-id'));
+      const res = await fetch(`/api/woocommerce/orders/${id}/convert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment_method: 'cash' }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.success) {
+        await loadAllData();
+        state.printableSale = d.sale;
+        render();
+        showToast(`Commande convertie en facture ${d.sale.invoice_number} (stock déduit)`);
+      } else {
+        showToast(d.error || 'Impossible de convertir cette commande');
+      }
+    };
+  });
 
   // POS Extras: Hold / Drafts / Calculator / Today Sales / % Discount / Create Devis
   const btnToggleDiscMode = document.getElementById('btn-toggle-disc-mode');
@@ -5720,6 +6744,19 @@ function attachEvents() {
       render();
     };
   });
+  document.querySelectorAll('.btn-whatsapp-quote').forEach((b) => {
+    b.onclick = () => {
+      const q = state.quotations.find((x) => x.id === Number(b.getAttribute('data-id')));
+      if (q) sendWhatsAppMessage(q.customer_phone || '', buildQuoteWhatsAppMessage(q), q.customer_name);
+    };
+  });
+  const btnWaQuoteModal = document.getElementById('btn-whatsapp-quote-modal');
+  if (btnWaQuoteModal) {
+    btnWaQuoteModal.onclick = () => {
+      const q = state.printableQuote;
+      if (q) sendWhatsAppMessage(q.customer_phone || '', buildQuoteWhatsAppMessage(q), q.customer_name);
+    };
+  }
   const btnCloseQPrint = document.getElementById('btn-close-quote-print');
   if (btnCloseQPrint) btnCloseQPrint.onclick = () => { state.printableQuote = null; render(); };
   const btnQPrintNow = document.getElementById('btn-print-quote-now');
@@ -5750,19 +6787,52 @@ function attachEvents() {
     };
   });
 
+  const formWarrantyLookup = document.getElementById('form-warranty-lookup');
+  if (formWarrantyLookup) {
+    formWarrantyLookup.onsubmit = async (e) => {
+      e.preventDefault();
+      const q = document.getElementById('input-warranty-query')?.value || '';
+      state.warrantyLookupQuery = q;
+      const res = await fetch(`/api/warranty/lookup?q=${encodeURIComponent(q)}`);
+      state.warrantyLookupResults = res.ok ? await res.json() : [];
+      render();
+    };
+  }
+  document.querySelectorAll('.btn-prefill-sav').forEach((b) => {
+    b.onclick = () => {
+      const item = (state.warrantyLookupResults || [])[Number(b.getAttribute('data-widx'))];
+      if (!item) return;
+      state.savPrefill = {
+        customer_name: item.customer_name || '',
+        customer_phone: item.customer_phone || '',
+        device_name: item.product_name || '',
+        serial_number: item.serial_number || '',
+        invoice_number: item.invoice_number || '',
+        under_warranty: Boolean(item.is_under_warranty),
+      };
+      render();
+      showToast('Champs SAV pré-remplis depuis la facture !');
+    };
+  });
+
   const formSav = document.getElementById('form-new-sav');
   if (formSav) {
     formSav.onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(formSav);
+      const payload = Object.fromEntries(fd.entries());
+      payload.under_warranty = fd.get('under_warranty') === 'on';
       const res = await fetch('/api/service-jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.fromEntries(fd.entries())),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
+        const created = await res.json();
+        state.savPrefill = null;
+        state.printableSav = created;
         await loadAllData();
-        showToast('Ticket SAV créé');
+        showToast(`Ticket SAV ${created.ticket_number} créé`);
       }
     };
   }
@@ -5777,6 +6847,53 @@ function attachEvents() {
       showToast('Statut SAV mis à jour');
     };
   });
+  document.querySelectorAll('.sel-sav-rma').forEach((s) => {
+    s.onchange = async () => {
+      await fetch(`/api/service-jobs/${s.getAttribute('data-id')}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplier_rma_status: s.value }),
+      });
+      await loadAllData();
+      showToast('Suivi RMA fournisseur mis à jour');
+    };
+  });
+  document.querySelectorAll('.btn-print-sav').forEach((b) => {
+    b.onclick = () => {
+      state.printableSav = state.serviceJobs.find((j) => Number(j.id) === Number(b.getAttribute('data-id'))) || null;
+      render();
+    };
+  });
+  const btnCloseSavPrint = document.getElementById('btn-close-sav-print');
+  if (btnCloseSavPrint) btnCloseSavPrint.onclick = () => { state.printableSav = null; render(); };
+  const btnPrintSavNow = document.getElementById('btn-print-sav-now');
+  if (btnPrintSavNow) btnPrintSavNow.onclick = () => window.print();
+  document.querySelectorAll('.btn-whatsapp-sav').forEach((b) => {
+    b.onclick = () => {
+      const job = state.serviceJobs.find((j) => Number(j.id) === Number(b.getAttribute('data-id')));
+      if (job) sendWhatsAppMessage(job.customer_phone || '', buildSavWhatsAppMessage(job), job.customer_name);
+    };
+  });
+
+  const formTransfer = document.getElementById('form-stock-transfer');
+  if (formTransfer) {
+    formTransfer.onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(formTransfer);
+      const res = await fetch('/api/stock-transfers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...Object.fromEntries(fd.entries()), operator_name: state.currentUser?.full_name || 'Admin' }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        await loadAllData();
+        showToast(`Transfert ${d.transfer_number} enregistré`);
+      } else {
+        showToast(d.error || 'Transfert impossible');
+      }
+    };
+  }
 
   // Reports Sub-tabs, P&L Period & Stock Adjustments
   document.querySelectorAll('[data-rsub]').forEach((b) => {
@@ -5837,7 +6954,8 @@ window.addEventListener('keydown', (e) => {
       state.posDraftModalOpen ||
       state.posCalcOpen ||
       state.todaySalesModalOpen ||
-      state.printableQuote
+      state.printableQuote ||
+      state.printableSav
     ) {
       state.inspectorOpen = false;
       state.productModalOpen = false;
@@ -5852,6 +6970,7 @@ window.addEventListener('keydown', (e) => {
       state.posCalcOpen = false;
       state.todaySalesModalOpen = false;
       state.printableQuote = null;
+      state.printableSav = null;
       render();
     }
   }

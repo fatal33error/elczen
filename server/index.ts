@@ -1867,6 +1867,15 @@ const server = http.createServer(async (req, res) => {
         SELECT COUNT(*) as count FROM products WHERE woo_sync_status = 'pending'
       `).get() as { count: number };
 
+      const pendingWooOrdersRow = db.prepare(`
+        SELECT COUNT(*) as count FROM woo_orders WHERE local_status = 'pending'
+      `).get() as { count: number };
+
+      const checksDueRow = db.prepare(`
+        SELECT COUNT(*) as count FROM bank_checks
+        WHERE status IN ('pending', 'deposited') AND date(due_date) <= date('now', '+7 days')
+      `).get() as { count: number };
+
       const grossProfit = (salesStats.totalRevenue || 0) - (salesStats.totalCogs || 0);
       const serviceProfit = (serviceStats.serviceRevenue || 0) - (serviceStats.servicePartsCost || 0);
       const netProfit = grossProfit + serviceProfit - (expenseStats.totalExpenses || 0);
@@ -1896,6 +1905,8 @@ const server = http.createServer(async (req, res) => {
         recentSales,
         upcomingInstallments,
         pendingWooSync: pendingWooSync.count,
+        pendingWooOrders: pendingWooOrdersRow.count,
+        checksDueSoon: checksDueRow.count,
       });
       return;
     }
@@ -2561,7 +2572,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/sales' && method === 'GET') {
-      const sales = db.prepare('SELECT * FROM sales ORDER BY id DESC LIMIT 100').all() as Record<string, any>[];
+      const sales = db.prepare(`
+        SELECT s.*, COALESCE(c.phone, '') as customer_phone
+        FROM sales s
+        LEFT JOIN customers c ON c.id = s.customer_id
+        ORDER BY s.id DESC LIMIT 100
+      `).all() as Record<string, any>[];
       const getItems = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?');
       sendJson(
         res,
@@ -2949,7 +2965,12 @@ const server = http.createServer(async (req, res) => {
 
         const matched = bestScore >= 20 ? bestMatch : undefined;
         const unitCost = Number(it.unit_cost) || 0;
+        const prevCost = matched ? Number(matched.current_cost_price) || 0 : 0;
         const retailEst = Number(it.suggested_retail_price) || Number(matched?.retail_price || Math.round(unitCost * 1.25));
+        const wholesaleCurr = matched ? Number(matched.wholesale_price) || 0 : 0;
+        const costIncreased = Boolean(matched && prevCost > 0 && unitCost > prevCost);
+        const costDeltaPct = prevCost > 0 ? Math.round(((unitCost - prevCost) / prevCost) * 100) : 0;
+        const marginPct = retailEst > 0 ? Math.round(((retailEst - unitCost) / retailEst) * 100) : 0;
 
         return {
           product_name: pName || (matched?.name_fr ?? 'Article Facture'),
@@ -2960,7 +2981,14 @@ const server = http.createServer(async (req, res) => {
           suggested_retail_price: retailEst,
           matched_product_id: matched ? Number(matched.id) : null,
           matched_product_name: matched ? String(matched.name_fr) : null,
-          current_cost_price: matched ? Number(matched.current_cost_price) : 0,
+          current_cost_price: prevCost,
+          previous_cost_price: prevCost,
+          current_retail_price: matched ? Number(matched.retail_price) || 0 : 0,
+          current_wholesale_price: wholesaleCurr,
+          cost_increased: costIncreased,
+          cost_delta_pct: costDeltaPct,
+          margin_pct: marginPct,
+          margin_warning: unitCost > 0 && retailEst > 0 && marginPct < 12,
         };
       });
 
@@ -3368,7 +3396,12 @@ Return ONLY strict valid JSON with keys:
     // 7B. QUOTATIONS (DEVIS), SERVICE/SAV JOBS, STOCK ADJUSTMENTS & P&L REPORT
     // ========================================================================
     if (pathname === '/api/quotations' && method === 'GET') {
-      const rows = db.prepare('SELECT * FROM quotations ORDER BY id DESC LIMIT 100').all() as Record<string, any>[];
+      const rows = db.prepare(`
+        SELECT q.*, COALESCE(c.phone, '') as customer_phone
+        FROM quotations q
+        LEFT JOIN customers c ON c.id = q.customer_id
+        ORDER BY q.id DESC LIMIT 100
+      `).all() as Record<string, any>[];
       sendJson(res, 200, rows.map((r) => ({ ...r, items: JSON.parse(r.items_json || '[]') })), req);
       return;
     }
@@ -3456,6 +3489,63 @@ Return ONLY strict valid JSON with keys:
       return;
     }
 
+    if (pathname === '/api/warranty/lookup' && method === 'GET') {
+      const q = (parsedUrl.searchParams.get('q') || '').trim();
+      if (!q) {
+        sendJson(res, 200, []);
+        return;
+      }
+      const like = `%${q.toLowerCase()}%`;
+      const rows = db.prepare(`
+        SELECT
+          si.id as sale_item_id,
+          si.product_id,
+          si.product_name,
+          si.barcode,
+          si.serial_number,
+          si.quantity,
+          si.unit_price,
+          si.warranty_months,
+          si.warranty_expires_at,
+          s.id as sale_id,
+          s.invoice_number,
+          s.created_at as sold_at,
+          s.customer_id,
+          s.customer_name,
+          s.status as sale_status,
+          COALESCE(c.phone, '') as customer_phone
+        FROM sale_items si
+        JOIN sales s ON s.id = si.sale_id
+        LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE COALESCE(s.status, 'completed') != 'canceled'
+          AND (
+            LOWER(COALESCE(si.serial_number, '')) LIKE ?
+            OR LOWER(s.invoice_number) LIKE ?
+            OR LOWER(s.customer_name) LIKE ?
+            OR LOWER(COALESCE(c.phone, '')) LIKE ?
+            OR LOWER(COALESCE(si.barcode, '')) LIKE ?
+          )
+        ORDER BY s.id DESC
+        LIMIT 25
+      `).all(like, like, like, like, like) as Record<string, any>[];
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayMs = Date.parse(todayStr);
+      const enriched = rows.map((r) => {
+        const expStr = String(r.warranty_expires_at || '').slice(0, 10);
+        const expMs = expStr ? Date.parse(expStr) : NaN;
+        const isUnder = Number.isFinite(expMs) ? expMs >= todayMs : false;
+        const daysRemaining = Number.isFinite(expMs) ? Math.ceil((expMs - todayMs) / (1000 * 60 * 60 * 24)) : 0;
+        return {
+          ...r,
+          is_under_warranty: isUnder,
+          days_remaining: daysRemaining,
+        };
+      });
+      sendJson(res, 200, enriched, req);
+      return;
+    }
+
     if (pathname === '/api/service-jobs' && method === 'GET') {
       sendJson(res, 200, db.prepare('SELECT * FROM service_jobs ORDER BY id DESC LIMIT 100').all(), req);
       return;
@@ -3478,8 +3568,9 @@ Return ONLY strict valid JSON with keys:
         INSERT INTO service_jobs (
           ticket_number, customer_id, customer_name, customer_phone,
           device_name, serial_number, issue_description, technician,
-          parts_cost, labor_price, total_price, paid_amount, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          parts_cost, labor_price, total_price, paid_amount, status,
+          invoice_number, under_warranty, supplier_rma_status, accessories_received
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         ticketNumber,
         body.customer_id ? Number(body.customer_id) : null,
@@ -3493,7 +3584,11 @@ Return ONLY strict valid JSON with keys:
         laborPrice,
         totalPrice,
         paidAmount,
-        String(body.status || 'pending')
+        String(body.status || 'pending'),
+        String(body.invoice_number || ''),
+        body.under_warranty ? 1 : 0,
+        String(body.supplier_rma_status || 'none'),
+        String(body.accessories_received || '')
       );
       logAudit('Atelier SAV', 'admin', 'SAV_CREATED', 'service_job', Number(resInsert.lastInsertRowid), { ticketNumber, deviceName });
       broadcastEvent('SERVICE_JOB_UPDATED', { ticketNumber });
@@ -3522,6 +3617,8 @@ Return ONLY strict valid JSON with keys:
           labor_price = ?,
           total_price = ?,
           paid_amount = ?,
+          supplier_rma_status = ?,
+          under_warranty = ?,
           updated_at = datetime('now')
         WHERE id = ?
       `).run(
@@ -3531,10 +3628,355 @@ Return ONLY strict valid JSON with keys:
         laborPrice,
         totalPrice,
         paidAmount,
+        String(body.supplier_rma_status ?? existing.supplier_rma_status ?? 'none'),
+        body.under_warranty !== undefined ? (body.under_warranty ? 1 : 0) : Number(existing.under_warranty || 0),
         id
       );
       broadcastEvent('SERVICE_JOB_UPDATED', { id });
       sendJson(res, 200, db.prepare('SELECT * FROM service_jobs WHERE id = ?').get(id));
+      return;
+    }
+
+    // ========================================================================
+    // 7C. BANK CHECKS / EFFETS (CRÉDIT AGRICOLE DU MAROC + TREASURY)
+    // ========================================================================
+    if (pathname === '/api/checks' && method === 'GET') {
+      const checks = db.prepare('SELECT * FROM bank_checks ORDER BY date(due_date) ASC, id DESC').all() as Record<string, any>[];
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const plus7 = new Date();
+      plus7.setDate(plus7.getDate() + 7);
+      const plus7Str = plus7.toISOString().slice(0, 10);
+
+      let totalIssuedPending = 0;
+      let totalReceivedPending = 0;
+      let overdueCount = 0;
+      let dueSoonCount = 0;
+      for (const ch of checks) {
+        if (ch.status === 'pending' || ch.status === 'deposited') {
+          if (ch.direction === 'issued') totalIssuedPending += Number(ch.amount || 0);
+          else totalReceivedPending += Number(ch.amount || 0);
+          if (String(ch.due_date || '') < todayStr) overdueCount++;
+          else if (String(ch.due_date || '') <= plus7Str) dueSoonCount++;
+        }
+      }
+      sendJson(res, 200, {
+        checks,
+        stats: { totalIssuedPending, totalReceivedPending, overdueCount, dueSoonCount },
+      }, req);
+      return;
+    }
+
+    if (pathname === '/api/checks' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const beneficiary = String(body.beneficiary_or_issuer || '').trim();
+      const amount = Number(body.amount) || 0;
+      if (!beneficiary || amount <= 0) {
+        sendJson(res, 400, { error: 'Bénéficiaire / Émetteur et montant > 0 requis' });
+        return;
+      }
+      const direction = body.direction === 'received' ? 'received' : 'issued';
+      const instType = body.instrument_type === 'effet' ? 'effet' : 'check';
+      const checkNumber = String(body.check_number || '').trim() || getNextInvoiceNumber('CHK');
+      const bankCode = String(body.bank_code || 'cam').trim();
+      const bankName = String(body.bank_name || 'Crédit Agricole du Maroc').trim();
+      const issueCity = String(body.issue_city || 'Casablanca').trim();
+      const issueDate = String(body.issue_date || new Date().toISOString().slice(0, 10));
+      const dueDate = String(body.due_date || issueDate);
+
+      const ins = db.prepare(`
+        INSERT INTO bank_checks (
+          direction, instrument_type, check_number, bank_code, bank_name,
+          beneficiary_or_issuer, amount, amount_words, issue_city, issue_date, due_date,
+          is_crossed, non_endorsable, status, supplier_id, customer_id, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        direction,
+        instType,
+        checkNumber,
+        bankCode,
+        bankName,
+        beneficiary,
+        amount,
+        String(body.amount_words || ''),
+        issueCity,
+        issueDate,
+        dueDate,
+        body.is_crossed === false || body.is_crossed === 0 ? 0 : 1,
+        body.non_endorsable ? 1 : 0,
+        String(body.status || 'pending'),
+        body.supplier_id ? Number(body.supplier_id) : null,
+        body.customer_id ? Number(body.customer_id) : null,
+        String(body.notes || '')
+      );
+      const checkId = Number(ins.lastInsertRowid);
+      if (body.record_payment) {
+        if (direction === 'issued' && body.supplier_id) {
+          db.prepare('UPDATE suppliers SET balance_owed = MAX(0, balance_owed - ?) WHERE id = ?').run(amount, Number(body.supplier_id));
+        } else if (direction === 'received' && body.customer_id) {
+          db.prepare(`INSERT INTO customer_payments (customer_id, amount, payment_method, notes) VALUES (?, ?, 'check', ?)`).run(
+            Number(body.customer_id),
+            amount,
+            `${instType === 'effet' ? 'Effet' : 'Chèque'} N° ${checkNumber} (Éch. ${dueDate})`
+          );
+          db.prepare('UPDATE customers SET total_debt = MAX(0, total_debt - ?) WHERE id = ?').run(amount, Number(body.customer_id));
+        }
+      }
+      logAudit('Trésorerie', 'admin', 'CHECK_RECORDED', 'bank_check', checkId, { checkNumber, amount, bankName, dueDate });
+      broadcastEvent('CHECK_UPDATED', { id: checkId });
+      sendJson(res, 200, db.prepare('SELECT * FROM bank_checks WHERE id = ?').get(checkId));
+      return;
+    }
+
+    const chkMatch = pathname.match(/^\/api\/checks\/(\d+)$/);
+    if (chkMatch && method === 'PUT') {
+      const id = Number(chkMatch[1]);
+      const existing = db.prepare('SELECT * FROM bank_checks WHERE id = ?').get(id) as Record<string, any> | undefined;
+      if (!existing) {
+        sendJson(res, 404, { error: 'Chèque introuvable' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      db.prepare(`
+        UPDATE bank_checks SET
+          status = ?,
+          due_date = ?,
+          notes = ?
+        WHERE id = ?
+      `).run(
+        String(body.status || existing.status),
+        String(body.due_date || existing.due_date),
+        String(body.notes ?? existing.notes ?? ''),
+        id
+      );
+      broadcastEvent('CHECK_UPDATED', { id });
+      sendJson(res, 200, db.prepare('SELECT * FROM bank_checks WHERE id = ?').get(id));
+      return;
+    }
+    if (chkMatch && method === 'DELETE') {
+      db.prepare('DELETE FROM bank_checks WHERE id = ?').run(Number(chkMatch[1]));
+      broadcastEvent('CHECK_UPDATED', {});
+      sendJson(res, 200, { success: true });
+      return;
+    }
+
+    // ========================================================================
+    // 7D. TWO-WAY WOOCOMMERCE ORDERS SYNC (PULL WEB ORDERS -> CONVERT POS SALE)
+    // ========================================================================
+    if (pathname === '/api/woocommerce/orders' && method === 'GET') {
+      const orders = db.prepare('SELECT * FROM woo_orders ORDER BY woo_order_id DESC LIMIT 100').all() as Record<string, any>[];
+      sendJson(res, 200, orders.map((o) => ({ ...o, items: JSON.parse(o.items_json || '[]') })), req);
+      return;
+    }
+
+    if (pathname === '/api/woocommerce/orders/pull' && method === 'POST') {
+      const settings = getSettingsMap();
+      const baseUrl = normalizeWooBaseUrl(settings.woo_url || '');
+      const ck = String(settings.woo_consumer_key || '').trim();
+      const cs = String(settings.woo_consumer_secret || '').trim();
+      if (!baseUrl || !ck || !cs) {
+        sendJson(res, 400, { error: 'Configurez votre URL et clés WooCommerce avant d\'importer les commandes.' });
+        return;
+      }
+
+      const wcRes = await wooFetch(baseUrl, ck, cs, '/wp-json/wc/v3/orders?per_page=30');
+      if (!wcRes.ok || !Array.isArray(wcRes.data)) {
+        sendJson(res, 400, { error: wcRes.errorMsg || 'Impossible de récupérer les commandes WooCommerce.' });
+        return;
+      }
+
+      const allProds = db.prepare('SELECT id, woo_id, sku, barcode, name_fr, current_cost_price, retail_price FROM products').all() as Record<string, any>[];
+      const byWooId = new Map<number, Record<string, any>>();
+      const bySku = new Map<string, Record<string, any>>();
+      for (const p of allProds) {
+        if (p.woo_id) byWooId.set(Number(p.woo_id), p);
+        if (p.sku) bySku.set(String(p.sku).toLowerCase(), p);
+        if (p.barcode) bySku.set(String(p.barcode).toLowerCase(), p);
+      }
+
+      const upsertOrder = db.prepare(`
+        INSERT INTO woo_orders (
+          woo_order_id, order_number, status, customer_name, customer_phone, customer_email,
+          customer_address, customer_city, payment_method_title, total_amount, items_json, order_date, synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(woo_order_id) DO UPDATE SET
+          status = excluded.status,
+          customer_name = excluded.customer_name,
+          customer_phone = excluded.customer_phone,
+          customer_address = excluded.customer_address,
+          customer_city = excluded.customer_city,
+          total_amount = excluded.total_amount,
+          items_json = excluded.items_json,
+          synced_at = datetime('now')
+      `);
+
+      let pulledCount = 0;
+      for (const ord of wcRes.data) {
+        const bill = ord.billing || {};
+        const ship = ord.shipping || {};
+        const fullName = `${bill.first_name || ship.first_name || ''} ${bill.last_name || ship.last_name || ''}`.trim() || 'Client Web';
+        const lineItems = Array.isArray(ord.line_items)
+          ? ord.line_items.map((li: any) => {
+              const matchedProd =
+                byWooId.get(Number(li.product_id)) ||
+                (li.sku ? bySku.get(String(li.sku).toLowerCase()) : undefined);
+              const qty = Math.max(1, Number(li.quantity) || 1);
+              const totalLine = Number(li.total) || 0;
+              return {
+                woo_product_id: Number(li.product_id) || 0,
+                product_id: matchedProd ? Number(matchedProd.id) : null,
+                sku: String(li.sku || matchedProd?.sku || ''),
+                product_name: String(li.name || matchedProd?.name_fr || 'Article Web'),
+                quantity: qty,
+                unit_price: totalLine > 0 ? Math.round((totalLine / qty) * 100) / 100 : Number(matchedProd?.retail_price || 0),
+              };
+            })
+          : [];
+
+        upsertOrder.run(
+          Number(ord.id),
+          String(ord.number || ord.id),
+          String(ord.status || 'processing'),
+          fullName,
+          String(bill.phone || ''),
+          String(bill.email || ''),
+          String(bill.address_1 || ship.address_1 || ''),
+          String(bill.city || ship.city || ''),
+          String(ord.payment_method_title || 'Paiement à la livraison'),
+          Number(ord.total) || 0,
+          JSON.stringify(lineItems),
+          String(ord.date_created || new Date().toISOString()).slice(0, 19).replace('T', ' ')
+        );
+        pulledCount++;
+      }
+
+      const orders = db.prepare('SELECT * FROM woo_orders ORDER BY woo_order_id DESC LIMIT 100').all() as Record<string, any>[];
+      broadcastEvent('WOO_ORDERS_PULLED', { pulledCount });
+      sendJson(res, 200, {
+        success: true,
+        pulledCount,
+        orders: orders.map((o) => ({ ...o, items: JSON.parse(o.items_json || '[]') })),
+      });
+      return;
+    }
+
+    const wooOrdConvertMatch = pathname.match(/^\/api\/woocommerce\/orders\/(\d+)\/convert$/);
+    if (wooOrdConvertMatch && method === 'POST') {
+      const id = Number(wooOrdConvertMatch[1]);
+      const ord = db.prepare('SELECT * FROM woo_orders WHERE id = ?').get(id) as Record<string, any> | undefined;
+      if (!ord) {
+        sendJson(res, 404, { error: 'Commande WooCommerce introuvable' });
+        return;
+      }
+      if (ord.local_status === 'converted') {
+        sendJson(res, 400, { error: 'Cette commande a déjà été validée et convertie en facture.' });
+        return;
+      }
+
+      const body = await readJsonBody(req).catch(() => ({}));
+      const rawItems = JSON.parse(ord.items_json || '[]') as Array<Record<string, any>>;
+      const matchedItems = rawItems.filter((it) => it.product_id);
+      if (matchedItems.length === 0) {
+        sendJson(res, 400, {
+          error: 'Aucun article de cette commande n’est lié au catalogue local (vérifiez les SKU ou synchronisez vos produits d’abord).',
+        });
+        return;
+      }
+
+      let customerId: number | null = null;
+      if (ord.customer_phone || ord.customer_name) {
+        const cleanPhone = String(ord.customer_phone || '').trim();
+        const existingCust = cleanPhone
+          ? (db.prepare('SELECT id FROM customers WHERE phone = ? LIMIT 1').get(cleanPhone) as { id: number } | undefined)
+          : undefined;
+        if (existingCust) {
+          customerId = existingCust.id;
+        } else if (ord.customer_name) {
+          const insC = db.prepare(`
+            INSERT INTO customers (name, phone, address, customer_type, notes)
+            VALUES (?, ?, ?, 'retail', ?)
+          `).run(ord.customer_name, cleanPhone, `${ord.customer_address || ''} ${ord.customer_city || ''}`.trim(), `Client Web #${ord.order_number}`);
+          customerId = Number(insC.lastInsertRowid);
+        }
+      }
+
+      let fullSale: Record<string, any>;
+      try {
+        fullSale = executeAtomicSale({
+          customer_id: customerId,
+          customer_name: ord.customer_name,
+          price_tier: 'retail',
+          paid_amount: body.paid_amount ?? ord.total_amount,
+          payment_method: body.payment_method || 'cash',
+          notes: `Commande WooCommerce #${ord.order_number}`,
+          items: matchedItems,
+        }, 'woocommerce_web');
+      } catch (err: any) {
+        sendJson(res, 400, { error: err?.message || 'Conversion impossible (vérifiez le stock).' });
+        return;
+      }
+
+      db.prepare("UPDATE woo_orders SET local_status = 'converted', status = 'completed', converted_sale_id = ? WHERE id = ?").run(fullSale.id, id);
+
+      const settings = getSettingsMap();
+      const baseUrl = normalizeWooBaseUrl(settings.woo_url || '');
+      const ck = String(settings.woo_consumer_key || '').trim();
+      const cs = String(settings.woo_consumer_secret || '').trim();
+      if (baseUrl && ck && cs) {
+        await wooFetch(baseUrl, ck, cs, `/wp-json/wc/v3/orders/${ord.woo_order_id}`, {
+          method: 'PUT',
+          body: { status: 'completed' },
+          timeoutMs: 8000,
+        }).catch(() => {});
+      }
+
+      logAudit('Boutique Web', 'admin', 'WOO_ORDER_CONVERTED', 'sale', fullSale.id, { woo_order_number: ord.order_number, invoice_number: fullSale.invoice_number });
+      broadcastEvent('SALE_COMPLETED', fullSale);
+      sendJson(res, 200, { success: true, sale: fullSale });
+      return;
+    }
+
+    // ========================================================================
+    // 7E. MULTI-DEPOT STOCK TRANSFERS (SHOWROOM <-> RESERVE DEPOT)
+    // ========================================================================
+    if (pathname === '/api/stock-transfers' && method === 'GET') {
+      sendJson(res, 200, db.prepare('SELECT * FROM stock_transfers ORDER BY id DESC LIMIT 100').all(), req);
+      return;
+    }
+
+    if (pathname === '/api/stock-transfers' && method === 'POST') {
+      const body = await readJsonBody(req);
+      const productId = Number(body.product_id);
+      const direction = body.direction === 'shop_to_depot' ? 'shop_to_depot' : 'depot_to_shop';
+      const qty = Math.abs(Math.floor(Number(body.quantity) || 0));
+      if (!productId || qty <= 0) {
+        sendJson(res, 400, { error: 'Produit et quantité positive requis' });
+        return;
+      }
+      const transfer = withTransaction(() => {
+        const prod = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Record<string, any> | undefined;
+        if (!prod) throw new Error('Article introuvable');
+        const totalStock = Number(prod.stock_quantity || 0);
+        const currentDepot = Math.min(totalStock, Math.max(0, Number(prod.warehouse_quantity || 0)));
+        const currentShop = Math.max(0, totalStock - currentDepot);
+        let nextDepot = currentDepot;
+        if (direction === 'shop_to_depot') {
+          if (qty > currentShop) throw new Error(`Stock Showroom insuffisant (dispo Showroom: ${currentShop} u.)`);
+          nextDepot = Math.min(totalStock, currentDepot + qty);
+        } else {
+          if (qty > currentDepot) throw new Error(`Stock Dépôt insuffisant (dispo Dépôt: ${currentDepot} u.)`);
+          nextDepot = Math.max(0, currentDepot - qty);
+        }
+        db.prepare(`UPDATE products SET warehouse_quantity = ?, updated_at = datetime('now') WHERE id = ?`).run(nextDepot, productId);
+        const trfNumber = getNextInvoiceNumber('TRF');
+        const ins = db.prepare(`
+          INSERT INTO stock_transfers (transfer_number, product_id, product_name, direction, quantity, notes, operator_name)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(trfNumber, productId, prod.name_fr, direction, qty, String(body.notes || ''), String(body.operator_name || 'Admin'));
+        return db.prepare('SELECT * FROM stock_transfers WHERE id = ?').get(Number(ins.lastInsertRowid));
+      });
+      logAudit(String(body.operator_name || 'Admin'), 'admin', 'STOCK_TRANSFER', 'product', productId, transfer);
+      broadcastEvent('STOCK_TRANSFERRED', transfer);
+      sendJson(res, 200, transfer);
       return;
     }
 

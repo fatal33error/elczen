@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/print_service.dart';
 import '../widgets/barcode_scanner_modal.dart';
 
 class ScannerScreen extends StatefulWidget {
@@ -1074,12 +1075,22 @@ class ScannerScreenState extends State<ScannerScreen> {
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () => ElectroZenPrintService.printBarcodeSticker(p, const {}),
+                      icon: const Icon(Icons.qr_code_2, size: 17),
+                      label: const Text('Étiquette'),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       onPressed: () => widget.onOpenProductForm(p, null),
                       icon: const Icon(Icons.photo_library_outlined, size: 17),
-                      label: Text('Photos (${p.images.length})'),
+                      label: Text('(${p.images.length})'),
                     ),
                   ],
                 ),

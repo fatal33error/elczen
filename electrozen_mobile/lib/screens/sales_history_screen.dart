@@ -373,6 +373,12 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                                             icon: const Icon(Icons.receipt_long_outlined, size: 16),
                                             label: const Text('Ticket 80mm'),
                                           ),
+                                          ElevatedButton.icon(
+                                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF059669), foregroundColor: Colors.white),
+                                            onPressed: () => ElectroZenPrintService.shareInvoicePdf(s, _settings),
+                                            icon: const Icon(Icons.share_outlined, size: 16),
+                                            label: const Text('WhatsApp PDF'),
+                                          ),
                                           if (!isCanceled)
                                             OutlinedButton.icon(
                                               style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFFE11D48)),

@@ -7,6 +7,7 @@ import '../services/api_service.dart';
 class _EditableInvoiceItem {
   int? matchedProductId;
   String? matchedProductName;
+  final double previousCost;
   final TextEditingController nameCtrl;
   final TextEditingController skuCtrl;
   final TextEditingController brandCtrl;
@@ -17,6 +18,7 @@ class _EditableInvoiceItem {
   _EditableInvoiceItem({
     this.matchedProductId,
     this.matchedProductName,
+    this.previousCost = 0.0,
     required String name,
     required String sku,
     required String brand,
@@ -146,6 +148,9 @@ class _InvoiceScannerScreenState extends State<InvoiceScannerScreen> {
           _EditableInvoiceItem(
             matchedProductId: (raw['matched_product_id'] as num?)?.toInt(),
             matchedProductName: raw['matched_product_name']?.toString(),
+            previousCost: (raw['previous_cost_price'] as num?)?.toDouble() ??
+                (raw['current_cost_price'] as num?)?.toDouble() ??
+                0.0,
             name: (raw['product_name'] ?? '').toString(),
             sku: (raw['sku_or_ref'] ?? '').toString(),
             brand: (raw['brand'] ?? '').toString(),
@@ -497,10 +502,55 @@ class _InvoiceScannerScreenState extends State<InvoiceScannerScreen> {
                           controller: it.retailCtrl,
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           style: const TextStyle(fontFamily: 'monospace'),
+                          onChanged: (_) => setState(() {}),
                           decoration: const InputDecoration(labelText: 'Prix Détail'),
                         ),
                       ),
                     ],
+                  ),
+                  Builder(
+                    builder: (_) {
+                      final currCost = double.tryParse(it.costCtrl.text.trim().replaceAll(',', '.')) ?? 0;
+                      final currRetail = double.tryParse(it.retailCtrl.text.trim().replaceAll(',', '.')) ?? 0;
+                      final costIncreased = it.previousCost > 0 && currCost > it.previousCost;
+                      final marginPct = currRetail > 0 ? ((currRetail - currCost) / currRetail) * 100 : 0.0;
+                      final lowMargin = currCost > 0 && currRetail > 0 && marginPct < 12;
+                      if (!costIncreased && !lowMargin) return const SizedBox.shrink();
+                      return Container(
+                        margin: const EdgeInsets.only(top: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF59E0B).withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(7),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFB45309)),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                costIncreased
+                                    ? 'Hausse coût vs ${_madFmt.format(it.previousCost)} MAD (Marge ${marginPct.toStringAsFixed(0)}%)'
+                                    : 'Marge faible (${marginPct.toStringAsFixed(0)}%)',
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF92400E)),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                setState(() {
+                                  it.retailCtrl.text = (currCost * 1.25).round().toString();
+                                });
+                              },
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                foregroundColor: const Color(0xFF92400E),
+                              ),
+                              child: const Text('Ajuster +25%', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
